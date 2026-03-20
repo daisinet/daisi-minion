@@ -51,13 +51,13 @@ public sealed class ModelCommandHandler : ISlashCommandHandler
             return;
         }
 
-        foreach (var file in files)
+        for (int i = 0; i < files.Length; i++)
         {
-            var name = Path.GetFileName(file);
-            var size = new FileInfo(file).Length;
+            var name = Path.GetFileName(files[i]);
+            var size = new FileInfo(files[i]).Length;
             var sizeMB = size / (1024.0 * 1024.0);
-            var active = file == config.ActiveModel ? " \x1b[32m(active)\x1b[0m" : "";
-            Console.WriteLine($"  {name} ({sizeMB:F0} MB){active}");
+            var active = files[i] == config.ActiveModel ? " \x1b[32m(active)\x1b[0m" : "";
+            Console.WriteLine($"  \x1b[36m{i + 1}\x1b[0m) {name} \x1b[90m({sizeMB:F0} MB)\x1b[0m{active}");
         }
 
         Console.WriteLine();
