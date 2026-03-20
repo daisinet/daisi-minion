@@ -1,4 +1,4 @@
-using Daisi.Llama.Chat;
+using Daisi.Llogos.Chat;
 
 namespace Daisi.Minion.Coding;
 

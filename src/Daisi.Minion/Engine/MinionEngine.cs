@@ -6,8 +6,9 @@ using Daisi.Minion.Commands.Handlers;
 using Daisi.Minion.Config;
 using Daisi.Minion.Host;
 using Daisi.Minion.Tui;
-using Daisi.Llama.Chat;
-using Daisi.Llama.Inference;
+using Daisi.Minion.Tui.Layout;
+using Daisi.Llogos.Chat;
+using Daisi.Llogos.Inference;
 
 namespace Daisi.Minion.Engine;
 
@@ -24,9 +25,13 @@ public sealed class MinionEngine : IDisposable
     private readonly SlashCommandDispatcher _commands = new();
     private readonly ProjectContext _projectContext;
     private ConversationManager? _conversation;
-    private DaisiLlamaModelHandle? _modelHandle;
+    private DaisiLlogosModelHandle? _modelHandle;
     private DualModeOrchestrator? _dualMode;
     private readonly CancellationTokenSource _cts = new();
+
+    // Layout components
+    private LayoutManager? _layout;
+    private ConsoleOutput? _output;
 
     public MinionEngine(ConfigManager configManager)
     {
@@ -58,6 +63,9 @@ public sealed class MinionEngine : IDisposable
         // Try to load the configured model
         await TryLoadModelAsync();
 
+        // Initialize layout (after model load so banner/load messages appear above)
+        InitializeLayout();
+
         // Initialize conversation
         InitializeConversation();
 
@@ -67,10 +75,12 @@ public sealed class MinionEngine : IDisposable
         // Register slash commands
         RegisterCommands();
 
+        // Set status bar indicators
+        SetInitialIndicators();
+
         // Main loop
         while (!_cts.IsCancellationRequested)
         {
-            _renderer.WritePrompt();
             var input = _input.ReadLine();
 
             if (input == null) // Ctrl+C/D
@@ -86,6 +96,12 @@ public sealed class MinionEngine : IDisposable
             {
                 if (input.Equals("/exit", StringComparison.OrdinalIgnoreCase))
                     break;
+
+                if (input.Equals("/clear", StringComparison.OrdinalIgnoreCase))
+                {
+                    _layout?.ClearContent();
+                    continue;
+                }
 
                 if (!await _commands.ExecuteAsync(input, _cts.Token))
                     _renderer.WriteError($"Unknown command: {input}. Type /help for available commands.");
@@ -104,16 +120,47 @@ public sealed class MinionEngine : IDisposable
         _renderer.WriteInfo("Goodbye!");
     }
 
+    private void InitializeLayout()
+    {
+        _layout = new LayoutManager();
+        _output = new ConsoleOutput(_layout);
+        _renderer.SetOutput(_output);
+        _input.SetLayout(_layout, _output);
+        _layout.Initialize();
+    }
+
+    private void SetInitialIndicators()
+    {
+        if (_modelHandle != null)
+            _layout?.StatusBar.SetIndicator("model", _modelHandle.ModelId);
+
+        if (!string.IsNullOrEmpty(_projectContext.GitBranch))
+            _layout?.StatusBar.SetIndicator("branch", _projectContext.GitBranch);
+
+        _layout?.StatusBar.SetIndicator("ctx", $"{_configManager.Config.ContextSize / 1024}k ctx");
+        _layout?.UpdateStatusBar();
+    }
+
     private async Task ProcessUserMessage(string input)
     {
         var parameters = GetGenerationParams();
         var toolExecutor = new ToolExecutor(_toolRegistry, _renderer);
-        var display = new StreamingDisplay(_renderer);
+        var display = new StreamingDisplay(_renderer, _output);
+
+        // Start spinner in status bar
+        _output?.UpdateStatus(sb => sb.StartSpinner("Thinking...", () =>
+            _output?.UpdateStatus(_ => { }))); // Redraw on each tick
 
         try
         {
             // Send message and stream response
-            var responseBuilder = new StringBuilder();
+            _output?.UpdateStatus(sb =>
+            {
+                sb.StopSpinner();
+                sb.StartSpinner("Generating...", () =>
+                    _output?.UpdateStatus(_ => { }));
+            });
+
             await foreach (var token in _conversation!.SendAsync(input, parameters, _cts.Token))
                 display.WriteToken(token);
 
@@ -125,6 +172,14 @@ public sealed class MinionEngine : IDisposable
                 var toolCalls = ToolCallParser.Parse(fullResponse);
                 if (toolCalls.Count == 0) break;
 
+                // Update status for tool execution
+                _output?.UpdateStatus(sb =>
+                {
+                    sb.StopSpinner();
+                    sb.StartSpinner($"Running {toolCalls.Count} tool(s)...", () =>
+                        _output?.UpdateStatus(_ => { }));
+                });
+
                 // Execute tools
                 var results = await toolExecutor.ExecuteToolCallsAsync(toolCalls, _cts.Token);
 
@@ -133,22 +188,46 @@ public sealed class MinionEngine : IDisposable
                     _conversation.AddToolResult(result);
 
                 // Resume generation
-                display = new StreamingDisplay(_renderer);
+                _output?.UpdateStatus(sb =>
+                {
+                    sb.StopSpinner();
+                    sb.StartSpinner("Generating...", () =>
+                        _output?.UpdateStatus(_ => { }));
+                });
+
+                display = new StreamingDisplay(_renderer, _output);
                 await foreach (var token in _conversation.ResumeAsync(parameters, _cts.Token))
                     display.WriteToken(token);
 
                 fullResponse = display.Finish();
             }
+
+            // Stop spinner, show ready status
+            _output?.UpdateStatus(sb =>
+            {
+                sb.StopSpinner();
+                sb.SetStatus("Ready");
+            });
         }
         catch (OperationCanceledException)
         {
             display.Finish();
             _renderer.WriteInfo("\n(interrupted)");
+            _output?.UpdateStatus(sb =>
+            {
+                sb.StopSpinner();
+                sb.SetStatus("Interrupted");
+            });
         }
         catch (Exception ex)
         {
             display.Finish();
             _renderer.WriteError(ex.Message);
+            _output?.UpdateStatus(sb =>
+            {
+                sb.StopSpinner();
+                sb.SetStatus($"Error: {ex.Message}");
+            });
         }
     }
 
@@ -176,11 +255,11 @@ public sealed class MinionEngine : IDisposable
         _renderer.WriteInfo($"Loading {Path.GetFileName(modelPath)}...");
 
         // Apply thread count limit to CPU backend
-        Daisi.Llama.Cpu.CpuThreading.ThreadCount = _configManager.Config.ThreadCount;
+        Daisi.Llogos.Cpu.CpuThreading.ThreadCount = _configManager.Config.ThreadCount;
 
         try
         {
-            var backend = new DaisiLlamaTextBackend();
+            var backend = new DaisiLlogosTextBackend();
             backend.OnLog = msg => _renderer.WriteInfo(msg);
             await backend.ConfigureAsync(new Daisi.Inference.Models.BackendConfiguration
             {
@@ -194,7 +273,7 @@ public sealed class MinionEngine : IDisposable
                 ContextSize = (uint)_configManager.Config.ContextSize,
             });
 
-            _modelHandle = ((DaisiLlamaModelHandleAdapter)handleAdapter).Inner;
+            _modelHandle = ((DaisiLlogosModelHandleAdapter)handleAdapter).Inner;
             _renderer.WriteSuccess($"Loaded {_modelHandle.ModelId} ({_modelHandle.Config.Architecture}, {_modelHandle.Config.NumLayers}L, {_modelHandle.Config.HiddenDim}D)");
         }
         catch (Exception ex)
@@ -251,7 +330,7 @@ public sealed class MinionEngine : IDisposable
 
         var idleTimeout = TimeSpan.FromMinutes(_configManager.Config.IdleTimeoutMinutes);
         var activityMonitor = new ActivityMonitor(idleTimeout);
-        var backend = new DaisiLlamaTextBackend();
+        var backend = new DaisiLlogosTextBackend();
         var hostService = new HostModeService(_renderer, backend);
         _dualMode = new DualModeOrchestrator(activityMonitor, hostService, _renderer);
         _dualMode.Start(_modelHandle);
@@ -302,6 +381,7 @@ public sealed class MinionEngine : IDisposable
 
     public void Dispose()
     {
+        _layout?.Dispose();
         _dualMode?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _conversation?.Dispose();
         _modelHandle?.Dispose();

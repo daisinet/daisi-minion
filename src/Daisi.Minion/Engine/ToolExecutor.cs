@@ -1,6 +1,6 @@
 using Daisi.Minion.Coding;
 using Daisi.Minion.Tui;
-using Daisi.Llama.Chat;
+using Daisi.Llogos.Chat;
 
 namespace Daisi.Minion.Engine;
 
@@ -28,11 +28,9 @@ public sealed class ToolExecutor
         foreach (var call in toolCalls)
         {
             _renderer.WriteToolCall(call.Name, call.Arguments.ToJsonString());
-            _renderer.StartSpinner($"Running {call.Name}...");
 
             var result = await _registry.ExecuteAsync(call, ct);
 
-            _renderer.StopSpinner();
             _renderer.WriteToolResult(call.Name, result.Output, result.IsError);
 
             results.Add(result.Output);

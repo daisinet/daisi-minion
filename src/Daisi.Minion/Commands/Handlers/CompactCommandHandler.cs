@@ -1,6 +1,6 @@
 using Daisi.Minion.Engine;
 using Daisi.Minion.Tui;
-using Daisi.Llama.Inference;
+using Daisi.Llogos.Inference;
 
 namespace Daisi.Minion.Commands.Handlers;
 

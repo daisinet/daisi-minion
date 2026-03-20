@@ -1,5 +1,5 @@
-using Daisi.Llama.Chat;
-using Daisi.Llama.Inference;
+using Daisi.Llogos.Chat;
+using Daisi.Llogos.Inference;
 
 namespace Daisi.Minion.Engine;
 
@@ -8,8 +8,8 @@ namespace Daisi.Minion.Engine;
 /// </summary>
 public sealed class ConversationManager : IDisposable
 {
-    private DaisiLlamaChatSession? _session;
-    private DaisiLlamaModelHandle? _modelHandle;
+    private DaisiLlogosChatSession? _session;
+    private DaisiLlogosModelHandle? _modelHandle;
     private readonly string _systemPrompt;
     private readonly List<ToolDefinition> _toolDefinitions;
 
@@ -25,7 +25,7 @@ public sealed class ConversationManager : IDisposable
     /// <summary>
     /// Initialize with a loaded model handle.
     /// </summary>
-    public void Initialize(DaisiLlamaModelHandle modelHandle)
+    public void Initialize(DaisiLlogosModelHandle modelHandle)
     {
         _modelHandle = modelHandle;
         Reset();

@@ -1,12 +1,16 @@
+using Daisi.Minion.Tui.Layout;
+
 namespace Daisi.Minion.Tui;
 
 /// <summary>
 /// Handles streaming display of model output with markdown awareness.
 /// Buffers tokens to detect code blocks and special formatting.
+/// Routes output through ConsoleOutput for thread safety.
 /// </summary>
 public sealed class StreamingDisplay
 {
     private readonly AnsiRenderer _renderer;
+    private readonly ConsoleOutput? _output;
     private readonly System.Text.StringBuilder _fullResponse = new();
     private bool _inCodeBlock;
 
@@ -14,9 +18,10 @@ public sealed class StreamingDisplay
     private const string Reset = "\x1b[0m";
     private const string BgGray = "\x1b[48;5;236m";
 
-    public StreamingDisplay(AnsiRenderer renderer)
+    public StreamingDisplay(AnsiRenderer renderer, ConsoleOutput? output = null)
     {
         _renderer = renderer;
+        _output = output;
     }
 
     /// <summary>
@@ -34,13 +39,10 @@ public sealed class StreamingDisplay
         if (shouldBeInCodeBlock != _inCodeBlock)
         {
             _inCodeBlock = shouldBeInCodeBlock;
-            if (_inCodeBlock)
-                Console.Write(BgGray);
-            else
-                Console.Write(Reset);
+            Write(_inCodeBlock ? BgGray : Reset);
         }
 
-        Console.Write(token);
+        Write(token);
     }
 
     /// <summary>
@@ -50,11 +52,11 @@ public sealed class StreamingDisplay
     {
         if (_inCodeBlock)
         {
-            Console.Write(Reset);
+            Write(Reset);
             _inCodeBlock = false;
         }
-        Console.WriteLine();
-        Console.WriteLine();
+        WriteLine();
+        WriteLine();
 
         var result = _fullResponse.ToString();
         _fullResponse.Clear();
@@ -65,6 +67,22 @@ public sealed class StreamingDisplay
     /// Get the full response accumulated so far.
     /// </summary>
     public string GetCurrentResponse() => _fullResponse.ToString();
+
+    private void Write(string text)
+    {
+        if (_output != null)
+            _output.WriteContent(text);
+        else
+            Console.Write(text);
+    }
+
+    private void WriteLine(string text = "")
+    {
+        if (_output != null)
+            _output.WriteContentLine(text);
+        else
+            Console.WriteLine(text);
+    }
 
     private static int CountSubstring(string text, string sub)
     {

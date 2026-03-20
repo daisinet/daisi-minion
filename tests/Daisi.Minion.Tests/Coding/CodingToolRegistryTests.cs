@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using Daisi.Minion.Coding;
 using Daisi.Minion.Coding.Tools;
-using Daisi.Llama.Chat;
+using Daisi.Llogos.Chat;
 
 namespace Daisi.Minion.Tests.Coding;
 

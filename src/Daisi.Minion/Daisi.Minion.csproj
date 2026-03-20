@@ -5,10 +5,10 @@
     <AssemblyName>daisi-minion</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\..\daisi-llama\src\Daisi.Llama\Daisi.Llama.csproj" />
-    <ProjectReference Include="..\..\..\daisi-llama\src\Daisi.Llama.Cpu\Daisi.Llama.Cpu.csproj" />
-    <ProjectReference Include="..\..\..\daisi-llama\src\Daisi.Llama.Cuda\Daisi.Llama.Cuda.csproj" />
-    <ProjectReference Include="..\..\..\daisi-llama\src\Daisi.Llama.Vulkan\Daisi.Llama.Vulkan.csproj" />
+    <ProjectReference Include="..\..\..\daisi-llogos\src\Daisi.Llogos\Daisi.Llogos.csproj" />
+    <ProjectReference Include="..\..\..\daisi-llogos\src\Daisi.Llogos.Cpu\Daisi.Llogos.Cpu.csproj" />
+    <ProjectReference Include="..\..\..\daisi-llogos\src\Daisi.Llogos.Cuda\Daisi.Llogos.Cuda.csproj" />
+    <ProjectReference Include="..\..\..\daisi-llogos\src\Daisi.Llogos.Vulkan\Daisi.Llogos.Vulkan.csproj" />
     <ProjectReference Include="..\..\..\daisi-sdk-dotnet\Daisi.Inference\Daisi.Inference.csproj" />
     <ProjectReference Include="..\..\..\daisi-hosts-dotnet\Daisi.Host.Core\Daisi.Host.Core.csproj" />
     <ProjectReference Include="..\..\..\daisi-sdk-dotnet\Daisi.SDK\Daisi.SDK.csproj" />

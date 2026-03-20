@@ -1,5 +1,5 @@
 using Daisi.Minion.Tui;
-using Daisi.Llama.Chat;
+using Daisi.Llogos.Chat;
 
 namespace Daisi.Minion.Host;
 
@@ -14,7 +14,7 @@ public sealed class DualModeOrchestrator : IAsyncDisposable
     private readonly ActivityMonitor _activityMonitor;
     private readonly HostModeService _hostService;
     private readonly AnsiRenderer _renderer;
-    private DaisiLlamaModelHandle? _modelHandle;
+    private DaisiLlogosModelHandle? _modelHandle;
     private Timer? _idleCheckTimer;
 
     public bool IsHostMode => _hostService.IsActive;
@@ -35,7 +35,7 @@ public sealed class DualModeOrchestrator : IAsyncDisposable
     /// <summary>
     /// Start monitoring for idle/active transitions.
     /// </summary>
-    public void Start(DaisiLlamaModelHandle modelHandle)
+    public void Start(DaisiLlogosModelHandle modelHandle)
     {
         _modelHandle = modelHandle;
 

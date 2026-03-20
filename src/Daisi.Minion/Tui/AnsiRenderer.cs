@@ -1,10 +1,12 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using Daisi.Minion.Tui.Layout;
 
 namespace Daisi.Minion.Tui;
 
 /// <summary>
 /// ANSI terminal renderer for markdown, diffs, code blocks, and tool output.
+/// All output is routed through ConsoleOutput for thread safety.
 /// </summary>
 public sealed partial class AnsiRenderer
 {
@@ -21,46 +23,56 @@ public sealed partial class AnsiRenderer
     private const string Gray = "\x1b[90m";
     private const string BgGray = "\x1b[48;5;236m";
 
-    private Timer? _spinnerTimer;
-    private int _spinnerFrame;
-    private static readonly string[] SpinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    private ConsoleOutput? _output;
+
+    /// <summary>Set the ConsoleOutput to route all writes through. If null, writes go directly to Console.</summary>
+    public void SetOutput(ConsoleOutput output) => _output = output;
+
+    private void Write(string text)
+    {
+        if (_output != null)
+            _output.WriteContent(text);
+        else
+            Console.Write(text);
+    }
+
+    private void WriteLine(string text = "")
+    {
+        if (_output != null)
+            _output.WriteContentLine(text);
+        else
+            Console.WriteLine(text);
+    }
 
     /// <summary>Write the startup banner.</summary>
     public void WriteBanner()
     {
-        Console.WriteLine($"{Bold}{Cyan}daisi-minion{Reset} {Dim}— local AI coding assistant{Reset}");
-        Console.WriteLine($"{Dim}Type /help for commands, Ctrl+C to exit{Reset}");
-        Console.WriteLine();
-    }
-
-    /// <summary>Write the input prompt showing the current directory.</summary>
-    public void WritePrompt()
-    {
-        var cwd = Path.GetFileName(Directory.GetCurrentDirectory());
-        Console.Write($"{Bold}{Blue}{cwd}{Reset} {Bold}>{Reset} ");
+        WriteLine($"{Bold}{Cyan}daisi-minion{Reset} {Dim}— local AI coding assistant{Reset}");
+        WriteLine($"{Dim}Type /help for commands, Ctrl+C to exit{Reset}");
+        WriteLine();
     }
 
     /// <summary>Write a streaming token from the model.</summary>
     public void WriteToken(string token)
     {
-        Console.Write(token);
+        Write(token);
     }
 
     /// <summary>End the current response line.</summary>
     public void EndResponse()
     {
-        Console.WriteLine();
-        Console.WriteLine();
+        WriteLine();
+        WriteLine();
     }
 
     /// <summary>Write a tool call intent.</summary>
     public void WriteToolCall(string toolName, string argsJson)
     {
-        Console.WriteLine();
-        Console.Write($"  {Yellow}⚡ {toolName}{Reset}");
+        WriteLine();
+        var line = $"  {Yellow}⚡ {toolName}{Reset}";
         if (argsJson.Length < 100)
-            Console.Write($" {Dim}{argsJson}{Reset}");
-        Console.WriteLine();
+            line += $" {Dim}{argsJson}{Reset}";
+        WriteLine(line);
     }
 
     /// <summary>Write a tool result.</summary>
@@ -68,54 +80,34 @@ public sealed partial class AnsiRenderer
     {
         var color = isError ? Red : Green;
         var icon = isError ? "✗" : "✓";
-        Console.WriteLine($"  {color}{icon} {toolName}{Reset}");
+        WriteLine($"  {color}{icon} {toolName}{Reset}");
 
         if (!string.IsNullOrEmpty(output))
         {
             var lines = output.Split('\n');
             var displayLines = lines.Length > 20 ? lines.Take(20).Append($"... ({lines.Length - 20} more lines)") : lines;
             foreach (var line in displayLines)
-                Console.WriteLine($"  {Dim}│{Reset} {line}");
+                WriteLine($"  {Dim}│{Reset} {line}");
         }
-        Console.WriteLine();
+        WriteLine();
     }
 
     /// <summary>Write an error message.</summary>
     public void WriteError(string message)
     {
-        Console.WriteLine($"{Red}Error: {message}{Reset}");
+        WriteLine($"{Red}Error: {message}{Reset}");
     }
 
     /// <summary>Write an info message.</summary>
     public void WriteInfo(string message)
     {
-        Console.WriteLine($"{Dim}{message}{Reset}");
+        WriteLine($"{Dim}{message}{Reset}");
     }
 
     /// <summary>Write a success message.</summary>
     public void WriteSuccess(string message)
     {
-        Console.WriteLine($"{Green}{message}{Reset}");
-    }
-
-    /// <summary>Start a spinner with a message.</summary>
-    public void StartSpinner(string message)
-    {
-        _spinnerFrame = 0;
-        _spinnerTimer = new Timer(_ =>
-        {
-            var frame = SpinnerFrames[_spinnerFrame % SpinnerFrames.Length];
-            Console.Write($"\r  {Cyan}{frame}{Reset} {Dim}{message}{Reset}  ");
-            _spinnerFrame++;
-        }, null, 0, 80);
-    }
-
-    /// <summary>Stop the spinner.</summary>
-    public void StopSpinner()
-    {
-        _spinnerTimer?.Dispose();
-        _spinnerTimer = null;
-        Console.Write("\r\x1b[2K"); // Clear line
+        WriteLine($"{Green}{message}{Reset}");
     }
 
     /// <summary>Render markdown-formatted text with ANSI styling.</summary>
