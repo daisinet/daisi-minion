@@ -31,7 +31,7 @@ public sealed partial class AnsiRenderer
     /// <summary>Set the ConsoleOutput to route all writes through. If null, writes go directly to Console.</summary>
     public void SetOutput(ConsoleOutput output) => _output = output;
 
-    private void Write(string text)
+    internal void Write(string text)
     {
         if (_output != null)
             _output.WriteContent(text);
@@ -39,7 +39,7 @@ public sealed partial class AnsiRenderer
             Console.Write(text);
     }
 
-    private void WriteLine(string text = "")
+    internal void WriteLine(string text = "")
     {
         if (_output != null)
             _output.WriteContentLine(text);
@@ -70,6 +70,71 @@ public sealed partial class AnsiRenderer
         WriteLine();
         Write(RenderMarkdown(text));
         WriteLine();
+    }
+
+    /// <summary>
+    /// Create a line-at-a-time markdown writer that tracks code block state
+    /// across calls. Each call to WriteLine renders and outputs one line.
+    /// </summary>
+    public MarkdownLineWriter CreateLineWriter()
+    {
+        return new MarkdownLineWriter(this);
+    }
+
+    /// <summary>
+    /// Streams markdown output one line at a time, tracking code block state.
+    /// </summary>
+    public sealed class MarkdownLineWriter
+    {
+        private readonly AnsiRenderer _renderer;
+        private bool _inCodeBlock;
+
+        internal MarkdownLineWriter(AnsiRenderer renderer)
+        {
+            _renderer = renderer;
+        }
+
+        /// <summary>Render and output a single line with markdown formatting.</summary>
+        public void WriteLine(string line)
+        {
+            if (line.StartsWith("```"))
+            {
+                _inCodeBlock = !_inCodeBlock;
+                _renderer.WriteLine(_inCodeBlock ? $"{BgGray}" : Reset);
+                return;
+            }
+
+            if (_inCodeBlock)
+            {
+                _renderer.WriteLine($"  {line}");
+                return;
+            }
+
+            // Headers
+            if (line.StartsWith("### "))
+                _renderer.WriteLine($"{Bold}{line[4..]}{Reset}");
+            else if (line.StartsWith("## "))
+                _renderer.WriteLine($"{Bold}{Cyan}{line[3..]}{Reset}");
+            else if (line.StartsWith("# "))
+                _renderer.WriteLine($"{Bold}{Blue}{line[2..]}{Reset}");
+            // Diff lines
+            else if (line.StartsWith('+') && !line.StartsWith("+++"))
+                _renderer.WriteLine($"{Green}{line}{Reset}");
+            else if (line.StartsWith('-') && !line.StartsWith("---"))
+                _renderer.WriteLine($"{Red}{line}{Reset}");
+            else
+                _renderer.WriteLine(RenderInlineMarkdown(line));
+        }
+
+        /// <summary>Close any open code block formatting.</summary>
+        public void Finish()
+        {
+            if (_inCodeBlock)
+            {
+                _renderer.Write(Reset);
+                _inCodeBlock = false;
+            }
+        }
     }
 
     /// <summary>Write a tool call intent.</summary>

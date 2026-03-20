@@ -14,17 +14,14 @@ public sealed class PersonaCommandHandler(
     {
         if (string.IsNullOrWhiteSpace(args))
         {
-            // List available personas
-            var current = configManager.Config.ActivePersona;
-            renderer.WriteInfo("Available personas:");
-            foreach (var name in personas.Available)
-            {
-                var marker = string.Equals(name, current, StringComparison.OrdinalIgnoreCase)
-                    ? " \x1b[32m(active)\x1b[0m" : "";
-                renderer.WriteInfo($"  {name}{marker}");
-            }
-            renderer.WriteInfo("");
-            renderer.WriteInfo("Usage: /persona <name>");
+            ListPersonas();
+            return Task.CompletedTask;
+        }
+
+        if (args.Trim().Equals("reload", StringComparison.OrdinalIgnoreCase))
+        {
+            personas.Reload();
+            renderer.WriteSuccess($"Reloaded {personas.Available.Count} personas from disk.");
             return Task.CompletedTask;
         }
 
@@ -45,5 +42,23 @@ public sealed class PersonaCommandHandler(
         onPersonaChanged();
 
         return Task.CompletedTask;
+    }
+
+    private void ListPersonas()
+    {
+        var current = configManager.Config.ActivePersona;
+        renderer.WriteInfo("Available personas:");
+        foreach (var name in personas.Available)
+        {
+            var marker = string.Equals(name, current, StringComparison.OrdinalIgnoreCase)
+                ? " \x1b[32m(active)\x1b[0m" : "";
+            renderer.WriteInfo($"  {name}{marker}");
+        }
+        renderer.WriteInfo("");
+        renderer.WriteInfo($"Personas folder: {PersonaManager.Directory}");
+        renderer.WriteInfo("Drop .md files there to add custom personas, or edit existing ones.");
+        renderer.WriteInfo("");
+        renderer.WriteInfo("Usage: /persona <name>    Switch persona");
+        renderer.WriteInfo("       /persona reload    Reload from disk");
     }
 }

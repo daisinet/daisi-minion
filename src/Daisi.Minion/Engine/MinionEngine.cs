@@ -29,6 +29,7 @@ public sealed class MinionEngine : IDisposable
     private DaisiLlogosModelHandle? _modelHandle;
     private DualModeOrchestrator? _dualMode;
     private readonly CancellationTokenSource _cts = new();
+    private CancellationTokenSource? _inferenceCts;
 
     // Layout components
     private LayoutManager? _layout;
@@ -140,6 +141,7 @@ public sealed class MinionEngine : IDisposable
             _layout?.StatusBar.SetIndicator("branch", _projectContext.GitBranch);
 
         _layout?.StatusBar.SetIndicator("ctx", $"{_configManager.Config.ContextSize / 1024}k ctx");
+        _layout?.StatusBar.SetIndicator("backend", _configManager.Config.Backend);
 
         var persona = _configManager.Config.ActivePersona;
         if (!string.IsNullOrEmpty(persona))
@@ -153,17 +155,21 @@ public sealed class MinionEngine : IDisposable
         var parameters = GetGenerationParams();
         var toolExecutor = new ToolExecutor(_toolRegistry, _renderer);
 
+        // Per-inference cancellation, linked to the app-level CTS
+        _inferenceCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        var ct = _inferenceCts.Token;
+
+        // Listen for double-Escape in the background to cancel inference
+        _ = Task.Run(() => ListenForEscapeCancel(_inferenceCts));
+
         // Show spinner while generating
         _output?.UpdateStatus(sb => sb.StartSpinner("Thinking...", () =>
             _output?.TickSpinner()));
 
         try
         {
-            var fullResponse = await CollectResponse(
-                _conversation!.SendAsync(input, parameters, _cts.Token));
-
-            // Render the response
-            _renderer.WriteResponse(fullResponse);
+            var fullResponse = await StreamByLine(
+                _conversation!.SendAsync(input, parameters, ct), ct);
 
             // Agentic tool loop
             while (ToolCallParser.ContainsToolCalls(fullResponse))
@@ -178,7 +184,7 @@ public sealed class MinionEngine : IDisposable
                         _output?.TickSpinner());
                 });
 
-                var results = await toolExecutor.ExecuteToolCallsAsync(toolCalls, _cts.Token);
+                var results = await toolExecutor.ExecuteToolCallsAsync(toolCalls, ct);
 
                 foreach (var result in results)
                     _conversation.AddToolResult(result);
@@ -190,10 +196,8 @@ public sealed class MinionEngine : IDisposable
                         _output?.TickSpinner());
                 });
 
-                fullResponse = await CollectResponse(
-                    _conversation.ResumeAsync(parameters, _cts.Token));
-
-                _renderer.WriteResponse(fullResponse);
+                fullResponse = await StreamByLine(
+                    _conversation.ResumeAsync(parameters, ct), ct);
             }
 
             _output?.UpdateStatus(sb =>
@@ -203,14 +207,21 @@ public sealed class MinionEngine : IDisposable
                 sb.SetStatus("Ready");
             });
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
         {
+            // Inference cancelled (double-Escape), not app shutdown
             _renderer.WriteInfo("(interrupted)");
             _output?.UpdateStatus(sb =>
             {
                 sb.StopSpinner();
+                sb.RemoveIndicator("gen");
                 sb.SetStatus("Interrupted");
             });
+        }
+        catch (OperationCanceledException)
+        {
+            // App shutdown
+            throw;
         }
         catch (Exception ex)
         {
@@ -218,25 +229,93 @@ public sealed class MinionEngine : IDisposable
             _output?.UpdateStatus(sb =>
             {
                 sb.StopSpinner();
+                sb.RemoveIndicator("gen");
                 sb.SetStatus($"Error: {ex.Message}");
             });
         }
+        finally
+        {
+            _inferenceCts.Dispose();
+            _inferenceCts = null;
+        }
     }
 
-    private async Task<string> CollectResponse(IAsyncEnumerable<string> tokens)
+    /// <summary>
+    /// Poll for double-Escape keypress during inference. Two Escape keys within 500ms cancels.
+    /// Consumes only Escape keys; other keys are ignored.
+    /// </summary>
+    private static void ListenForEscapeCancel(CancellationTokenSource inferenceCts)
     {
-        var sb = new StringBuilder();
-        var tokenCount = 0;
-        await foreach (var token in tokens)
+        var lastEscape = DateTime.MinValue;
+        while (!inferenceCts.IsCancellationRequested)
         {
-            sb.Append(token);
-            tokenCount++;
-            if (tokenCount % 5 == 0) // Update every 5 tokens to avoid thrashing
-                _output?.UpdateStatus(s => s.SetIndicator("gen", $"{tokenCount} tok"));
+            if (!Console.KeyAvailable)
+            {
+                Thread.Sleep(50);
+                continue;
+            }
+
+            var key = Console.ReadKey(intercept: true);
+            if (key.Key == ConsoleKey.Escape)
+            {
+                var now = DateTime.UtcNow;
+                if ((now - lastEscape).TotalMilliseconds < 500)
+                {
+                    inferenceCts.Cancel();
+                    return;
+                }
+                lastEscape = now;
+            }
         }
-        // Final count
+    }
+
+    /// <summary>
+    /// Collect tokens, emitting each complete line to the output as it becomes available.
+    /// Lines are flushed on newline characters or at end of stream.
+    /// Returns the full accumulated response for tool call parsing.
+    /// </summary>
+    private async Task<string> StreamByLine(IAsyncEnumerable<string> tokens, CancellationToken ct = default)
+    {
+        var fullResponse = new StringBuilder();
+        var lineBuffer = new StringBuilder();
+        var tokenCount = 0;
+        var lineWriter = _renderer.CreateLineWriter();
+        var firstLine = true;
+
+        await foreach (var token in tokens.WithCancellation(ct))
+        {
+            fullResponse.Append(token);
+            lineBuffer.Append(token);
+            tokenCount++;
+
+            if (tokenCount % 5 == 0)
+                _output?.UpdateStatus(s => s.SetIndicator("gen", $"{tokenCount} tok"));
+
+            // Emit complete lines
+            while (lineBuffer.ToString().Contains('\n'))
+            {
+                var text = lineBuffer.ToString();
+                var nlIdx = text.IndexOf('\n');
+                var line = text[..nlIdx];
+                lineBuffer.Clear();
+                lineBuffer.Append(text[(nlIdx + 1)..]);
+
+                if (firstLine) { _renderer.WriteLine(); firstLine = false; }
+                lineWriter.WriteLine(line);
+            }
+        }
+
+        // Flush remaining partial line
+        if (lineBuffer.Length > 0)
+        {
+            if (firstLine) { _renderer.WriteLine(); firstLine = false; }
+            lineWriter.WriteLine(lineBuffer.ToString());
+        }
+        lineWriter.Finish();
+        _renderer.WriteLine();
+
         _output?.UpdateStatus(s => s.SetIndicator("gen", $"{tokenCount} tok"));
-        return sb.ToString();
+        return fullResponse.ToString();
     }
 
     private async Task TryLoadModelAsync()
@@ -274,14 +353,22 @@ public sealed class MinionEngine : IDisposable
                 Runtime = _configManager.Config.Backend,
             });
 
+            // Use per-model profile if available; fetch from HuggingFace if missing
+            var profile = ModelProfile.Load(modelPath);
+            if (profile == null)
+                profile = await TryFetchProfileFromHuggingFace(modelPath);
+            var contextSize = profile?.ContextSize ?? _configManager.Config.ContextSize;
+
             var handleAdapter = await backend.LoadModelAsync(new Daisi.Inference.Models.ModelLoadRequest
             {
                 ModelId = Path.GetFileNameWithoutExtension(modelPath),
                 FilePath = modelPath,
-                ContextSize = (uint)_configManager.Config.ContextSize,
+                ContextSize = (uint)contextSize,
             });
 
             _modelHandle = ((DaisiLlogosModelHandleAdapter)handleAdapter).Inner;
+            if (profile != null)
+                _renderer.WriteInfo($"Profile: temp={profile.Temperature}, top_k={profile.TopK}, top_p={profile.TopP}, ctx={contextSize}");
             _renderer.WriteSuccess($"Loaded {_modelHandle.ModelId} ({_modelHandle.Config.Architecture}, {_modelHandle.Config.NumLayers}L, {_modelHandle.Config.HiddenDim}D)");
         }
         catch (Exception ex)
@@ -290,15 +377,139 @@ public sealed class MinionEngine : IDisposable
         }
     }
 
+    /// <summary>
+    /// Try to find the model on HuggingFace by searching for its filename,
+    /// fetch generation config, and save a local profile.
+    /// </summary>
+    private async Task<ModelProfile?> TryFetchProfileFromHuggingFace(string modelPath)
+    {
+        var fileName = Path.GetFileName(modelPath);
+        var modelName = Path.GetFileNameWithoutExtension(modelPath);
+
+        _renderer.WriteInfo($"No local profile found. Searching HuggingFace for {modelName}...");
+
+        try
+        {
+            var hf = new HuggingFaceClient(_renderer);
+
+            // Strategy 1: search by the GGUF filename
+            var repoId = await SearchForRepo(hf, modelName, fileName);
+
+            if (repoId == null)
+            {
+                // Strategy 2: strip quantization suffix and search for base model
+                var baseName = StripQuantSuffix(modelName);
+                if (baseName != modelName)
+                    repoId = await SearchForBaseModel(hf, baseName);
+            }
+
+            if (repoId == null)
+            {
+                _renderer.WriteInfo("Could not find model on HuggingFace. Using default settings.");
+                return null;
+            }
+
+            _renderer.WriteInfo($"Found repo: {repoId}");
+            var profile = await hf.FetchGenerationConfigAsync(repoId, CancellationToken.None);
+            if (profile != null)
+            {
+                profile.ModelId = modelName;
+                profile.Save(modelPath);
+                _renderer.WriteSuccess("Saved model profile from HuggingFace.");
+            }
+            return profile;
+        }
+        catch (Exception ex)
+        {
+            _renderer.WriteInfo($"HuggingFace lookup failed: {ex.Message}. Using default settings.");
+            return null;
+        }
+    }
+
+    /// <summary>Search HuggingFace for a GGUF repo matching a search term that contains the given file.</summary>
+    private static async Task<string?> SearchForRepo(HuggingFaceClient hf, string? searchTerm, string ggufFileName)
+    {
+        if (string.IsNullOrEmpty(searchTerm)) return null;
+
+        using var http = new HttpClient();
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("daisi-minion/1.0");
+
+        // Search the HF API for GGUF repos matching the term
+        var searchUrl = $"https://huggingface.co/api/models?search={Uri.EscapeDataString(searchTerm)}&filter=gguf&limit=5";
+        var json = await http.GetStringAsync(searchUrl);
+        var doc = System.Text.Json.JsonDocument.Parse(json);
+
+        foreach (var model in doc.RootElement.EnumerateArray())
+        {
+            var id = model.GetProperty("id").GetString();
+            if (id == null) continue;
+
+            // Check if this repo has our exact file
+            if (model.TryGetProperty("siblings", out var siblings))
+            {
+                foreach (var sib in siblings.EnumerateArray())
+                {
+                    var fname = sib.GetProperty("rfilename").GetString();
+                    if (string.Equals(fname, ggufFileName, StringComparison.OrdinalIgnoreCase))
+                        return id;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Search for the base (non-GGUF) model repo to get generation config.</summary>
+    private static async Task<string?> SearchForBaseModel(HuggingFaceClient hf, string baseName)
+    {
+        using var http = new HttpClient();
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("daisi-minion/1.0");
+
+        var searchUrl = $"https://huggingface.co/api/models?search={Uri.EscapeDataString(baseName)}&limit=5";
+        var json = await http.GetStringAsync(searchUrl);
+        var doc = System.Text.Json.JsonDocument.Parse(json);
+
+        foreach (var model in doc.RootElement.EnumerateArray())
+        {
+            var id = model.GetProperty("id").GetString();
+            if (id == null) continue;
+
+            // Prefer repos that look like the original model (not GGUF forks)
+            if (id.Contains("GGUF", StringComparison.OrdinalIgnoreCase)) continue;
+            return id;
+        }
+
+        // If nothing else, take the first result
+        foreach (var model in doc.RootElement.EnumerateArray())
+            return model.GetProperty("id").GetString();
+
+        return null;
+    }
+
+    /// <summary>Strip common GGUF quantization suffixes to get the base model name.</summary>
+    private static string StripQuantSuffix(string name)
+    {
+        // Common patterns: Model-Q4_K_M, Model-q8_0, Model-IQ2_M, Model-f16
+        var suffixes = new[] { "-Q", "-q", "-IQ", "-iq", "-f16", "-f32", "-F16", "-F32", ".Q", ".q", ".IQ", ".iq" };
+        foreach (var suffix in suffixes)
+        {
+            var idx = name.IndexOf(suffix, StringComparison.Ordinal);
+            if (idx > 0)
+                return name[..idx];
+        }
+        // Also strip trailing -GGUF
+        if (name.EndsWith("-GGUF", StringComparison.OrdinalIgnoreCase))
+            return name[..^5];
+        return name;
+    }
+
     private string? PromptForModel()
     {
         var dir = _configManager.Config.ModelsDirectory;
         if (!Directory.Exists(dir))
             return null;
 
-        var ggufFiles = Directory.EnumerateFiles(dir, "*.gguf")
-            .OrderBy(f => f)
-            .ToList();
+        var ggufFiles = FindGgufFiles(dir);
 
         if (ggufFiles.Count == 0)
             return null;
@@ -306,7 +517,7 @@ public sealed class MinionEngine : IDisposable
         if (ggufFiles.Count == 1)
         {
             var only = ggufFiles[0];
-            _renderer.WriteInfo($"Found model: {Path.GetFileName(only)}");
+            _renderer.WriteInfo($"Found model: {Path.GetRelativePath(dir, only)}");
             return only;
         }
 
@@ -314,9 +525,11 @@ public sealed class MinionEngine : IDisposable
         Console.WriteLine();
         for (int i = 0; i < ggufFiles.Count; i++)
         {
-            var name = Path.GetFileName(ggufFiles[i]);
+            var relPath = Path.GetRelativePath(dir, ggufFiles[i]);
             var sizeMB = new FileInfo(ggufFiles[i]).Length / (1024.0 * 1024.0);
-            Console.WriteLine($"  \x1b[36m{i + 1}\x1b[0m) {name} \x1b[90m({sizeMB:F0} MB)\x1b[0m");
+            var sizeGB = sizeMB / 1024.0;
+            var sizeStr = sizeGB >= 1.0 ? $"{sizeGB:F1} GB" : $"{sizeMB:F0} MB";
+            Console.WriteLine($"  \x1b[36m{i + 1}\x1b[0m) {relPath} \x1b[90m({sizeStr})\x1b[0m");
         }
         Console.WriteLine();
         Console.Write("Select a model [1]: ");
@@ -376,6 +589,16 @@ public sealed class MinionEngine : IDisposable
         return sb.ToString();
     }
 
+    private static List<string> FindGgufFiles(string modelsDir)
+    {
+        var files = new List<string>();
+        files.AddRange(Directory.EnumerateFiles(modelsDir, "*.gguf"));
+        foreach (var subDir in Directory.EnumerateDirectories(modelsDir))
+            files.AddRange(Directory.EnumerateFiles(subDir, "*.gguf"));
+        files.Sort(StringComparer.OrdinalIgnoreCase);
+        return files;
+    }
+
     private void RegisterCommands()
     {
         _commands.Register("help", new HelpCommandHandler(_renderer));
@@ -388,19 +611,48 @@ public sealed class MinionEngine : IDisposable
             InitializeConversation();
             var name = _configManager.Config.ActivePersona;
             _layout?.SetPersonaLabel(name ?? "");
-            // Redraw command bar to show updated label
             _output?.RedrawCommandBar("", 0);
         }));
+        _commands.Register("backend", new BackendCommandHandler(_renderer, _configManager, name =>
+        {
+            _layout?.StatusBar.SetIndicator("backend", name);
+            _layout?.UpdateStatusBar();
+            // Reload model with new backend
+            Task.Run(async () =>
+            {
+                _conversation?.Dispose();
+                _conversation = null;
+                _dualMode?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                _dualMode = null;
+                _modelHandle?.Dispose();
+                _modelHandle = null;
+                await TryLoadModelAsync();
+                InitializeConversation();
+                InitializeDualMode();
+                // Update model indicator
+                if (_modelHandle != null)
+                    _output?.UpdateStatus(sb => sb.SetIndicator("model", _modelHandle.ModelId));
+                _renderer.WriteSuccess("Model reloaded.");
+            });
+        }));
+        _commands.Register("inf-settings", new InfSettingsCommandHandler(_renderer, _configManager));
     }
 
-    private GenerationParams GetGenerationParams() => new()
+    private GenerationParams GetGenerationParams()
     {
-        MaxTokens = _configManager.Config.MaxTokens,
-        Temperature = _configManager.Config.Temperature,
-        TopK = 40,
-        TopP = 0.9f,
-        RepetitionPenalty = 1.1f,
-    };
+        // Use per-model profile if available, falling back to global config
+        var modelPath = _configManager.Config.ActiveModel;
+        var profile = !string.IsNullOrEmpty(modelPath) ? ModelProfile.Load(modelPath) : null;
+
+        return new GenerationParams
+        {
+            MaxTokens = profile?.MaxTokens ?? _configManager.Config.MaxTokens,
+            Temperature = profile?.Temperature ?? _configManager.Config.Temperature,
+            TopK = profile?.TopK ?? 40,
+            TopP = profile?.TopP ?? 0.9f,
+            RepetitionPenalty = profile?.RepetitionPenalty ?? 1.1f,
+        };
+    }
 
     public void Dispose()
     {
