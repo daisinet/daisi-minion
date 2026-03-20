@@ -5,6 +5,9 @@
     <AssemblyName>daisi-minion</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Personas\*.md" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\..\daisi-llogos\src\Daisi.Llogos\Daisi.Llogos.csproj" />
     <ProjectReference Include="..\..\..\daisi-llogos\src\Daisi.Llogos.Cpu\Daisi.Llogos.Cpu.csproj" />
     <ProjectReference Include="..\..\..\daisi-llogos\src\Daisi.Llogos.Cuda\Daisi.Llogos.Cuda.csproj" />

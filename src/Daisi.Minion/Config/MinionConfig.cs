@@ -32,6 +32,9 @@ public sealed class MinionConfig
     [JsonPropertyName("temperature")]
     public float Temperature { get; set; } = 0.7f;
 
+    [JsonPropertyName("active_persona")]
+    public string? ActivePersona { get; set; } = "coder";
+
     [JsonPropertyName("models")]
     public List<ModelEntry> Models { get; set; } = [];
 }

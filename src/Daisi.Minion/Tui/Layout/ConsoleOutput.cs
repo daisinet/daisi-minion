@@ -43,6 +43,15 @@ public sealed class ConsoleOutput
         }
     }
 
+    /// <summary>Thread-safe spinner-only update — only rewrites the spinner character, not the full line.</summary>
+    public void TickSpinner()
+    {
+        lock (_writeLock)
+        {
+            _layout.UpdateSpinnerChar();
+        }
+    }
+
     /// <summary>Thread-safe redraw of the command bar.</summary>
     public void RedrawCommandBar(string text, int cursorPos)
     {

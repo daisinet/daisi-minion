@@ -22,6 +22,9 @@ public sealed partial class AnsiRenderer
     private const string Cyan = "\x1b[36m";
     private const string Gray = "\x1b[90m";
     private const string BgGray = "\x1b[48;5;236m";
+    private const string BgDarkGray = "\x1b[48;5;235m";
+    private const string BgMutedRed = "\x1b[48;5;52m";
+    private const string White = "\x1b[97m";
 
     private ConsoleOutput? _output;
 
@@ -52,16 +55,20 @@ public sealed partial class AnsiRenderer
         WriteLine();
     }
 
-    /// <summary>Write a streaming token from the model.</summary>
-    public void WriteToken(string token)
+    /// <summary>Echo the user's input into the content area with a muted background.</summary>
+    public void WriteUserInput(string text)
     {
-        Write(token);
+        // Dark background bar with white text, full-width
+        var width = _output != null ? 0 : Console.WindowWidth; // 0 = let layout handle it
+        WriteLine($"{BgDarkGray}{White} > {text} {Reset}");
     }
 
-    /// <summary>End the current response line.</summary>
-    public void EndResponse()
+    /// <summary>Write a complete model response, rendered with markdown formatting.</summary>
+    public void WriteResponse(string text)
     {
+        if (string.IsNullOrWhiteSpace(text)) return;
         WriteLine();
+        Write(RenderMarkdown(text));
         WriteLine();
     }
 
@@ -92,10 +99,10 @@ public sealed partial class AnsiRenderer
         WriteLine();
     }
 
-    /// <summary>Write an error message.</summary>
+    /// <summary>Write an error message with a muted red background.</summary>
     public void WriteError(string message)
     {
-        WriteLine($"{Red}Error: {message}{Reset}");
+        WriteLine($"{BgMutedRed}{White} Error: {message} {Reset}");
     }
 
     /// <summary>Write an info message.</summary>

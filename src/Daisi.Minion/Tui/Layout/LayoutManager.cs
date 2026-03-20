@@ -6,28 +6,55 @@ namespace Daisi.Minion.Tui.Layout;
 /// Central layout coordinator using ANSI scroll regions (DECSTBM).
 /// Manages three zones:
 ///   1. Content area (scroll region) — rows 1 to (H - reserved)
-///   2. Status bar (1 line, reverse video) — pinned below scroll region
-///   3. Command bar (1+ lines) — pinned at bottom
+///   2. Status bar (black bg, floating) — with padding above and below
+///   3. Command bar (1+ lines) — with orange top/bottom borders
 ///
-/// Content written to the scroll region auto-scrolls without disturbing the bars.
-/// Status/command bar updates: save cursor, jump outside region, draw, restore cursor.
+/// Layout (bottom-up):
+///   [content scroll region]
+///   (blank padding)
+///   status bar (black bg)
+///   (blank padding)
+///   ─── orange top border ───
+///   command bar line(s)
+///   ─── orange bottom border ───
 /// </summary>
 public sealed class LayoutManager : IDisposable
 {
     private const string Esc = "\x1b[";
+    private const string Reset = "\x1b[0m";
+    private const string Orange = "\x1b[38;5;208m";
+    private const string OrangeBg = "\x1b[48;5;208m";
+    private const string Black = "\x1b[30m";
+    private const string BlackBg = "\x1b[40m";
+    private const string DimWhite = "\x1b[2;37m";
+    private const string HideCursor = "\x1b[?25l";
+    private const string ShowCursor = "\x1b[?25h";
 
     private int _termWidth;
     private int _termHeight;
     private int _commandBarHeight = 1;
+    private int _lastCursorRow;
+    private int _lastCursorCol;
     private Timer? _resizeTimer;
+    private string _personaLabel = "";
 
     public StatusBar StatusBar { get; } = new();
 
-    // Layout row calculations (1-based for ANSI)
-    private int ReservedBottom => 1 + _commandBarHeight; // status bar + command bar lines
+    /// <summary>Set the persona label shown on the bottom border of the command bar.</summary>
+    public void SetPersonaLabel(string name)
+    {
+        _personaLabel = string.IsNullOrEmpty(name) ? "" : $" {name} ";
+    }
+
+    // Layout row calculations (1-based for ANSI), bottom-up
+    private int ReservedBottom => _commandBarHeight + 5;
     private int ScrollRegionEnd => _termHeight - ReservedBottom;
-    private int StatusBarRow => ScrollRegionEnd + 1;
-    private int CommandBarFirstRow => StatusBarRow + 1;
+    private int PadAboveRow => ScrollRegionEnd + 1;
+    private int StatusBarRow => ScrollRegionEnd + 2;
+    private int PadBelowRow => ScrollRegionEnd + 3;
+    private int OrangeTopRow => ScrollRegionEnd + 4;
+    private int CommandBarFirstRow => ScrollRegionEnd + 5;
+    private int OrangeBottomRow => CommandBarFirstRow + _commandBarHeight;
 
     /// <summary>Current terminal width.</summary>
     public int Width => _termWidth;
@@ -46,14 +73,13 @@ public sealed class LayoutManager : IDisposable
     private static void EnableWindowsVt100()
     {
         if (!OperatingSystem.IsWindows()) return;
-        var handle = GetStdHandle(-11); // STD_OUTPUT_HANDLE
+        var handle = GetStdHandle(-11);
         if (GetConsoleMode(handle, out var mode))
-            SetConsoleMode(handle, mode | 0x0004); // ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            SetConsoleMode(handle, mode | 0x0004);
     }
 
     /// <summary>
     /// Initialize the layout: enable VT100, set up scroll region, draw initial bars.
-    /// Call once at startup.
     /// </summary>
     public void Initialize()
     {
@@ -68,79 +94,123 @@ public sealed class LayoutManager : IDisposable
         UpdateStatusBar();
         RedrawCommandBar("", 0);
 
-        // Move cursor to the content area (top-left of scroll region)
+        // Move cursor to the content area
         Console.Write($"{Esc}1;1H");
         Console.Out.Flush();
 
-        // Poll for resize every 250ms
         _resizeTimer = new Timer(_ => CheckResize(), null, 250, 250);
     }
 
-    /// <summary>Write text into the content scroll region. Caller must hold the write lock.</summary>
+    /// <summary>Write text into the content scroll region.</summary>
     public void WriteToContent(string text)
     {
-        // Save cursor, move into scroll region, restore is not needed —
-        // we always keep the cursor in the scroll region during content writes.
-        // If we're currently positioned outside (e.g. after a bar update), move back.
-        Console.Write($"{Esc}s"); // Save cursor
-        Console.Write($"{Esc}{ScrollRegionEnd};1H"); // Move to bottom of scroll region
+        Console.Write($"{HideCursor}");
+        Console.Write($"{Esc}s");
+        Console.Write($"{Esc}{ScrollRegionEnd};1H");
         Console.Write(text);
+        Console.Write($"{Esc}u");
+        Console.Write($"{ShowCursor}");
         Console.Out.Flush();
     }
 
-    /// <summary>Redraw the status bar at its fixed row. Caller must hold the write lock.</summary>
+    /// <summary>Redraw the status bar at its fixed row.</summary>
     public void UpdateStatusBar()
     {
         var content = StatusBar.Render(_termWidth);
-        Console.Write($"{Esc}s"); // Save cursor
-        Console.Write($"{Esc}{StatusBarRow};1H"); // Move to status bar row
-        Console.Write($"{Esc}7m"); // Reverse video
-        // Ensure we fill exactly the terminal width
+
+        Console.Write($"{HideCursor}");
+        Console.Write($"{Esc}s");
+
+        // Blank padding above
+        Console.Write($"{Esc}{PadAboveRow};1H{Esc}2K");
+
+        // Status bar
+        Console.Write($"{Esc}{StatusBarRow};1H{Esc}2K");
+        Console.Write($"{BlackBg}{DimWhite}");
         if (content.Length >= _termWidth)
             Console.Write(content[.._termWidth]);
         else
             Console.Write(content + new string(' ', _termWidth - content.Length));
-        Console.Write($"{Esc}0m"); // Reset style
-        Console.Write($"{Esc}u"); // Restore cursor
+        Console.Write(Reset);
+
+        // Blank padding below
+        Console.Write($"{Esc}{PadBelowRow};1H{Esc}2K");
+
+        Console.Write($"{Esc}u");
+        RestoreCursorVisible();
         Console.Out.Flush();
     }
 
-    /// <summary>Redraw the command bar. Caller must hold the write lock.</summary>
+    /// <summary>Update only the spinner character. Minimal work, no flicker.</summary>
+    public void UpdateSpinnerChar()
+    {
+        var ch = StatusBar.CurrentSpinnerChar;
+        if (ch == null) return;
+
+        Console.Write($"{HideCursor}");
+        Console.Write($"{Esc}s");
+        Console.Write($"{Esc}{StatusBarRow};{StatusBar.SpinnerCol}H");
+        Console.Write($"{BlackBg}{DimWhite}{ch}{Reset}");
+        Console.Write($"{Esc}u");
+        RestoreCursorVisible();
+        Console.Out.Flush();
+    }
+
+    /// <summary>Redraw the command bar.</summary>
     public void RedrawCommandBar(string text, int cursorPos)
     {
         var newHeight = CommandBar.HeightForText(text, _termWidth);
-        var maxHeight = Math.Max(1, (_termHeight - 2) / 2); // Cap at half terminal
+        var maxHeight = Math.Max(1, (_termHeight - 6) / 2);
         newHeight = Math.Min(newHeight, maxHeight);
 
         if (newHeight != _commandBarHeight)
         {
             _commandBarHeight = newHeight;
             SetScrollRegion();
-            // Redraw status bar at its new position
             UpdateStatusBar();
         }
 
         var lines = CommandBar.Render(text, _termWidth);
+        var orangeBorder = new string('\u2500', _termWidth);
 
-        Console.Write($"{Esc}s"); // Save cursor
+        Console.Write($"{HideCursor}");
+
+        // Orange top border
+        Console.Write($"{Esc}{OrangeTopRow};1H{Esc}2K");
+        Console.Write($"{Orange}{orangeBorder}{Reset}");
+
+        // Command bar text lines
         for (var i = 0; i < _commandBarHeight; i++)
         {
             var row = CommandBarFirstRow + i;
-            Console.Write($"{Esc}{row};1H"); // Move to row
-            Console.Write($"{Esc}2K"); // Clear line
+            Console.Write($"{Esc}{row};1H{Esc}2K");
             if (i < lines.Length)
                 Console.Write(lines[i]);
         }
 
-        // Position cursor in the command bar
+        // Orange bottom border with persona label on the right
+        Console.Write($"{Esc}{OrangeBottomRow};1H{Esc}2K");
+        if (_personaLabel.Length > 0 && _personaLabel.Length < _termWidth - 4)
+        {
+            var borderLen = _termWidth - _personaLabel.Length;
+            Console.Write($"{Orange}{new string('\u2500', borderLen)}{Reset}");
+            Console.Write($"{OrangeBg}{Black}{_personaLabel}{Reset}");
+        }
+        else
+        {
+            Console.Write($"{Orange}{orangeBorder}{Reset}");
+        }
+
+        // Position cursor in the command bar and show it
         var (cursorRow, cursorCol) = CommandBar.CursorPosition(cursorPos, _termWidth);
-        var absRow = CommandBarFirstRow + cursorRow;
-        var absCol = cursorCol + 1; // 1-based
-        Console.Write($"{Esc}{absRow};{absCol}H");
+        _lastCursorRow = CommandBarFirstRow + cursorRow;
+        _lastCursorCol = cursorCol + 1;
+        Console.Write($"{Esc}{_lastCursorRow};{_lastCursorCol}H");
+        Console.Write($"{ShowCursor}");
         Console.Out.Flush();
     }
 
-    /// <summary>Resize the command bar (e.g. when input wraps to more lines).</summary>
+    /// <summary>Resize the command bar.</summary>
     public void ResizeCommandBar(int newHeight)
     {
         if (newHeight == _commandBarHeight) return;
@@ -149,37 +219,44 @@ public sealed class LayoutManager : IDisposable
         UpdateStatusBar();
     }
 
-    /// <summary>Clear the scroll region content (for /clear command).</summary>
+    /// <summary>Clear the scroll region content.</summary>
     public void ClearContent()
     {
-        Console.Write($"{Esc}s"); // Save cursor
-        Console.Write($"{Esc}1;1H"); // Move to top of scroll region
+        Console.Write($"{HideCursor}");
+        Console.Write($"{Esc}1;1H");
         for (var r = 1; r <= ScrollRegionEnd; r++)
         {
             Console.Write($"{Esc}{r};1H");
-            Console.Write($"{Esc}2K"); // Clear line
+            Console.Write($"{Esc}2K");
         }
-        Console.Write($"{Esc}{ScrollRegionEnd};1H"); // Position at bottom of scroll region
+        Console.Write($"{Esc}{ScrollRegionEnd};1H");
+        RestoreCursorVisible();
         Console.Out.Flush();
     }
 
-    /// <summary>Reset terminal to normal state. Call on shutdown.</summary>
+    /// <summary>Reset terminal to normal state.</summary>
     public void Dispose()
     {
         _resizeTimer?.Dispose();
         StatusBar.StopSpinner();
 
-        // Reset scroll region to full terminal
         Console.Write($"{Esc}r");
-        // Move to bottom
         Console.Write($"{Esc}{_termHeight};1H");
+        Console.Write($"{ShowCursor}");
         Console.WriteLine();
         Console.Out.Flush();
     }
 
+    private void RestoreCursorVisible()
+    {
+        // Move cursor back to its last known command bar position
+        if (_lastCursorRow > 0)
+            Console.Write($"{Esc}{_lastCursorRow};{_lastCursorCol}H");
+        Console.Write($"{ShowCursor}");
+    }
+
     private void SetScrollRegion()
     {
-        // DECSTBM: set scroll region from row 1 to ScrollRegionEnd
         Console.Write($"{Esc}1;{ScrollRegionEnd}r");
     }
 
@@ -192,7 +269,6 @@ public sealed class LayoutManager : IDisposable
         _termWidth = w;
         _termHeight = h;
 
-        // Reapply scroll region and redraw fixed elements
         SetScrollRegion();
         UpdateStatusBar();
     }

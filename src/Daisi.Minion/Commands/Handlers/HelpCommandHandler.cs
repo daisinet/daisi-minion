@@ -12,6 +12,8 @@ public sealed class HelpCommandHandler(AnsiRenderer renderer) : ISlashCommandHan
         renderer.WriteInfo("  /compact           Summarize conversation to free context");
         renderer.WriteInfo("  /model             List and switch models");
         renderer.WriteInfo("  /model <url>       Download model from HuggingFace");
+        renderer.WriteInfo("  /persona           List available personas");
+        renderer.WriteInfo("  /persona <name>    Switch persona (resets conversation)");
         renderer.WriteInfo("  /exit              Exit daisi-minion");
         Console.WriteLine();
         return Task.CompletedTask;

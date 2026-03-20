@@ -24,6 +24,7 @@ public sealed class MinionEngine : IDisposable
     private readonly CodingToolRegistry _toolRegistry = new();
     private readonly SlashCommandDispatcher _commands = new();
     private readonly ProjectContext _projectContext;
+    private readonly PersonaManager _personas = new();
     private ConversationManager? _conversation;
     private DaisiLlogosModelHandle? _modelHandle;
     private DualModeOrchestrator? _dualMode;
@@ -114,6 +115,7 @@ public sealed class MinionEngine : IDisposable
                 continue;
             }
 
+            _renderer.WriteUserInput(input);
             await ProcessUserMessage(input);
         }
 
@@ -138,6 +140,11 @@ public sealed class MinionEngine : IDisposable
             _layout?.StatusBar.SetIndicator("branch", _projectContext.GitBranch);
 
         _layout?.StatusBar.SetIndicator("ctx", $"{_configManager.Config.ContextSize / 1024}k ctx");
+
+        var persona = _configManager.Config.ActivePersona;
+        if (!string.IsNullOrEmpty(persona))
+            _layout?.SetPersonaLabel(persona);
+
         _layout?.UpdateStatusBar();
     }
 
@@ -145,74 +152,60 @@ public sealed class MinionEngine : IDisposable
     {
         var parameters = GetGenerationParams();
         var toolExecutor = new ToolExecutor(_toolRegistry, _renderer);
-        var display = new StreamingDisplay(_renderer, _output);
 
-        // Start spinner in status bar
+        // Show spinner while generating
         _output?.UpdateStatus(sb => sb.StartSpinner("Thinking...", () =>
-            _output?.UpdateStatus(_ => { }))); // Redraw on each tick
+            _output?.TickSpinner()));
 
         try
         {
-            // Send message and stream response
-            _output?.UpdateStatus(sb =>
-            {
-                sb.StopSpinner();
-                sb.StartSpinner("Generating...", () =>
-                    _output?.UpdateStatus(_ => { }));
-            });
+            var fullResponse = await CollectResponse(
+                _conversation!.SendAsync(input, parameters, _cts.Token));
 
-            await foreach (var token in _conversation!.SendAsync(input, parameters, _cts.Token))
-                display.WriteToken(token);
+            // Render the response
+            _renderer.WriteResponse(fullResponse);
 
-            var fullResponse = display.Finish();
-
-            // Check for tool calls in the response
+            // Agentic tool loop
             while (ToolCallParser.ContainsToolCalls(fullResponse))
             {
                 var toolCalls = ToolCallParser.Parse(fullResponse);
                 if (toolCalls.Count == 0) break;
 
-                // Update status for tool execution
                 _output?.UpdateStatus(sb =>
                 {
                     sb.StopSpinner();
                     sb.StartSpinner($"Running {toolCalls.Count} tool(s)...", () =>
-                        _output?.UpdateStatus(_ => { }));
+                        _output?.TickSpinner());
                 });
 
-                // Execute tools
                 var results = await toolExecutor.ExecuteToolCallsAsync(toolCalls, _cts.Token);
 
-                // Inject results into conversation
                 foreach (var result in results)
                     _conversation.AddToolResult(result);
 
-                // Resume generation
                 _output?.UpdateStatus(sb =>
                 {
                     sb.StopSpinner();
                     sb.StartSpinner("Generating...", () =>
-                        _output?.UpdateStatus(_ => { }));
+                        _output?.TickSpinner());
                 });
 
-                display = new StreamingDisplay(_renderer, _output);
-                await foreach (var token in _conversation.ResumeAsync(parameters, _cts.Token))
-                    display.WriteToken(token);
+                fullResponse = await CollectResponse(
+                    _conversation.ResumeAsync(parameters, _cts.Token));
 
-                fullResponse = display.Finish();
+                _renderer.WriteResponse(fullResponse);
             }
 
-            // Stop spinner, show ready status
             _output?.UpdateStatus(sb =>
             {
                 sb.StopSpinner();
+                sb.RemoveIndicator("gen");
                 sb.SetStatus("Ready");
             });
         }
         catch (OperationCanceledException)
         {
-            display.Finish();
-            _renderer.WriteInfo("\n(interrupted)");
+            _renderer.WriteInfo("(interrupted)");
             _output?.UpdateStatus(sb =>
             {
                 sb.StopSpinner();
@@ -221,7 +214,6 @@ public sealed class MinionEngine : IDisposable
         }
         catch (Exception ex)
         {
-            display.Finish();
             _renderer.WriteError(ex.Message);
             _output?.UpdateStatus(sb =>
             {
@@ -229,6 +221,22 @@ public sealed class MinionEngine : IDisposable
                 sb.SetStatus($"Error: {ex.Message}");
             });
         }
+    }
+
+    private async Task<string> CollectResponse(IAsyncEnumerable<string> tokens)
+    {
+        var sb = new StringBuilder();
+        var tokenCount = 0;
+        await foreach (var token in tokens)
+        {
+            sb.Append(token);
+            tokenCount++;
+            if (tokenCount % 5 == 0) // Update every 5 tokens to avoid thrashing
+                _output?.UpdateStatus(s => s.SetIndicator("gen", $"{tokenCount} tok"));
+        }
+        // Final count
+        _output?.UpdateStatus(s => s.SetIndicator("gen", $"{tokenCount} tok"));
+        return sb.ToString();
     }
 
     private async Task TryLoadModelAsync()
@@ -349,15 +357,21 @@ public sealed class MinionEngine : IDisposable
     private string BuildSystemPrompt()
     {
         var sb = new StringBuilder();
-        sb.AppendLine("You are daisi-minion, a local AI coding assistant. You help users with software engineering tasks by reading, writing, and editing files, running commands, and navigating codebases.");
+        sb.AppendLine("You are daisi-minion, a local AI assistant.");
         sb.AppendLine();
-        sb.AppendLine("Guidelines:");
-        sb.AppendLine("- Be concise and direct. Lead with the answer or action.");
-        sb.AppendLine("- Use tools to explore and modify the codebase. Don't guess — read files first.");
-        sb.AppendLine("- When editing files, use file_edit for surgical changes, file_write for new files.");
-        sb.AppendLine("- Show your reasoning briefly, then act.");
-        sb.AppendLine("- If you need to run a command, use the shell tool.");
-        sb.AppendLine();
+
+        // Inject persona
+        var personaName = _configManager.Config.ActivePersona;
+        if (!string.IsNullOrEmpty(personaName))
+        {
+            var personaContent = _personas.GetContent(personaName);
+            if (personaContent != null)
+            {
+                sb.AppendLine(personaContent);
+                sb.AppendLine();
+            }
+        }
+
         sb.Append(_projectContext.ToSystemPromptSection());
         return sb.ToString();
     }
@@ -368,6 +382,15 @@ public sealed class MinionEngine : IDisposable
         _commands.Register("clear", new ClearCommandHandler(_conversation!, _renderer));
         _commands.Register("compact", new CompactCommandHandler(_conversation!, _renderer, GetGenerationParams));
         _commands.Register("model", new ModelCommandHandler(_renderer, _configManager));
+        _commands.Register("persona", new PersonaCommandHandler(_renderer, _personas, _configManager, () =>
+        {
+            _conversation?.Dispose();
+            InitializeConversation();
+            var name = _configManager.Config.ActivePersona;
+            _layout?.SetPersonaLabel(name ?? "");
+            // Redraw command bar to show updated label
+            _output?.RedrawCommandBar("", 0);
+        }));
     }
 
     private GenerationParams GetGenerationParams() => new()
