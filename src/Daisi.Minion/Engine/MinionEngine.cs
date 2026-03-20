@@ -155,18 +155,15 @@ public sealed class MinionEngine : IDisposable
     private async Task TryLoadModelAsync()
     {
         var modelPath = _configManager.Config.ActiveModel;
+
+        // If saved model is missing or not set, prompt the user to pick one
         if (string.IsNullOrEmpty(modelPath) || !File.Exists(modelPath))
         {
-            // Try to find any GGUF in the models directory
-            var dir = _configManager.Config.ModelsDirectory;
-            if (Directory.Exists(dir))
+            modelPath = PromptForModel();
+            if (modelPath != null)
             {
-                modelPath = Directory.EnumerateFiles(dir, "*.gguf").FirstOrDefault();
-                if (modelPath != null)
-                {
-                    _configManager.Config.ActiveModel = modelPath;
-                    _configManager.Save();
-                }
+                _configManager.Config.ActiveModel = modelPath;
+                _configManager.Save();
             }
         }
 
@@ -178,9 +175,13 @@ public sealed class MinionEngine : IDisposable
 
         _renderer.WriteInfo($"Loading {Path.GetFileName(modelPath)}...");
 
+        // Apply thread count limit to CPU backend
+        Daisi.Llama.Cpu.CpuThreading.ThreadCount = _configManager.Config.ThreadCount;
+
         try
         {
             var backend = new DaisiLlamaTextBackend();
+            backend.OnLog = msg => _renderer.WriteInfo(msg);
             await backend.ConfigureAsync(new Daisi.Inference.Models.BackendConfiguration
             {
                 Runtime = _configManager.Config.Backend,
@@ -200,6 +201,48 @@ public sealed class MinionEngine : IDisposable
         {
             _renderer.WriteError($"Failed to load model: {ex.Message}");
         }
+    }
+
+    private string? PromptForModel()
+    {
+        var dir = _configManager.Config.ModelsDirectory;
+        if (!Directory.Exists(dir))
+            return null;
+
+        var ggufFiles = Directory.EnumerateFiles(dir, "*.gguf")
+            .OrderBy(f => f)
+            .ToList();
+
+        if (ggufFiles.Count == 0)
+            return null;
+
+        if (ggufFiles.Count == 1)
+        {
+            var only = ggufFiles[0];
+            _renderer.WriteInfo($"Found model: {Path.GetFileName(only)}");
+            return only;
+        }
+
+        _renderer.WriteInfo("Available models:");
+        Console.WriteLine();
+        for (int i = 0; i < ggufFiles.Count; i++)
+        {
+            var name = Path.GetFileName(ggufFiles[i]);
+            var sizeMB = new FileInfo(ggufFiles[i]).Length / (1024.0 * 1024.0);
+            Console.WriteLine($"  \x1b[36m{i + 1}\x1b[0m) {name} \x1b[90m({sizeMB:F0} MB)\x1b[0m");
+        }
+        Console.WriteLine();
+        Console.Write("Select a model [1]: ");
+
+        var input = Console.ReadLine()?.Trim();
+        if (string.IsNullOrEmpty(input))
+            return ggufFiles[0];
+
+        if (int.TryParse(input, out int choice) && choice >= 1 && choice <= ggufFiles.Count)
+            return ggufFiles[choice - 1];
+
+        _renderer.WriteError("Invalid selection, using first model.");
+        return ggufFiles[0];
     }
 
     private void InitializeDualMode()

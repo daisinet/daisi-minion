@@ -26,6 +26,9 @@ public sealed class MinionConfig
     [JsonPropertyName("context_size")]
     public int ContextSize { get; set; } = 8192;
 
+    [JsonPropertyName("thread_count")]
+    public int ThreadCount { get; set; } = Math.Max(1, Environment.ProcessorCount - 2);
+
     [JsonPropertyName("temperature")]
     public float Temperature { get; set; } = 0.7f;
 
