@@ -14,10 +14,10 @@ public sealed class MinionToolFormatter : IToolFormatter
         ToolPromptFormatter.FormatToolsBlock(tools);
 
     public bool ContainsToolCalls(string text) =>
-        ToolCallParser.ContainsToolCalls(text);
+        QwenToolCallParser.ContainsToolCalls(text);
 
     public List<ToolCall> ParseToolCalls(string text) =>
-        ToolCallParser.Parse(text);
+        QwenToolCallParser.Parse(text);
 
     public ChatMessage FormatToolResult(string toolName, string result) =>
         new("tool", result);

@@ -37,32 +37,29 @@ public sealed class MinionChatRenderer : IChatRenderer
         {
             sb.Append("<|im_start|>system\n");
 
-            // Include system message content if first message is system
+            // System message content goes AFTER tools (matches Qwen native template)
+            string? systemContent = null;
             if (messages.Count > 0 && messages[0].Role == "system")
-                sb.Append(messages[0].Content).Append("\n\n");
+                systemContent = messages[0].Content;
 
-            // Tools block
-            sb.Append("# Tools\n\nYou have access to the following tools. Use them to take action — do not just describe what you would do.\n\n");
-            sb.Append("<tools>");
+            // Tools block — matches Qwen 3.5 native chat_template.jinja format
+            sb.Append("# Tools\n\nYou have access to the following functions:\n\n<tools>");
             foreach (var tool in _tools)
             {
                 sb.Append('\n');
-                var toolObj = new
+                sb.Append(JsonSerializer.Serialize(new
                 {
-                    type = "function",
-                    function = new
-                    {
-                        name = tool.Name,
-                        description = tool.Description,
-                        parameters = tool.ParametersSchema,
-                    }
-                };
-                sb.Append(JsonSerializer.Serialize(toolObj, JsonOpts));
+                    name = tool.Name,
+                    description = tool.Description,
+                    parameters = tool.ParametersSchema,
+                }, JsonOpts));
             }
             sb.Append("\n</tools>\n\n");
-            sb.Append("When you need to take action, call a tool using this exact format:\n");
-            sb.Append("<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n");
-            sb.Append("IMPORTANT: When asked to create, edit, or build something, use your tools immediately. Do not describe what you plan to do — just do it.");
+            sb.Append("If you choose to call a function ONLY reply in the following format with NO suffix:\n\n");
+            sb.Append("<tool_call>\n<function=example_function_name>\n<parameter=example_parameter>\nvalue\n</parameter>\n</function>\n</tool_call>\n\n");
+            sb.Append("<IMPORTANT>\nWhen asked to create, edit, or build something, use your tools immediately. Do not describe what you plan to do — just do it.\n</IMPORTANT>");
+            if (systemContent != null)
+                sb.Append("\n\n").Append(systemContent);
             sb.Append("<|im_end|>\n");
         }
         else
