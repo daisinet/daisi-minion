@@ -389,8 +389,11 @@ public sealed class MinionEngine : IDisposable
 
     private static void ListenForEscapeCancel(CancellationTokenSource inferenceCts)
     {
+        // Capture the token (a struct) — safe to read even after the CTS is disposed.
+        var ct = inferenceCts.Token;
         var lastEscape = DateTime.MinValue;
-        while (!inferenceCts.IsCancellationRequested)
+
+        while (!ct.IsCancellationRequested)
         {
             if (!Console.KeyAvailable)
             {
@@ -404,7 +407,7 @@ public sealed class MinionEngine : IDisposable
                 var now = DateTime.UtcNow;
                 if ((now - lastEscape).TotalMilliseconds < 500)
                 {
-                    inferenceCts.Cancel();
+                    try { inferenceCts.Cancel(); } catch (ObjectDisposedException) { }
                     return;
                 }
                 lastEscape = now;
