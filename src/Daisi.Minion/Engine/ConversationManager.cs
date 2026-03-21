@@ -58,7 +58,7 @@ public sealed class ConversationManager : IDisposable
         if (_session == null)
             throw new InvalidOperationException("No model loaded. Use /model to load a model.");
 
-        return _session.ChatAsync(new ChatMessage("user", userMessage), parameters, ct);
+        return TokenStreamFixer.Fix(_session.ChatAsync(new ChatMessage("user", userMessage), parameters, ct), ct);
     }
 
     /// <summary>
@@ -78,7 +78,7 @@ public sealed class ConversationManager : IDisposable
         if (_session == null)
             throw new InvalidOperationException("No model loaded.");
 
-        return _session.ChatAsync(new ChatMessage("user", ""), parameters, ct);
+        return TokenStreamFixer.Fix(_session.ChatAsync(new ChatMessage("user", ""), parameters, ct), ct);
     }
 
     /// <summary>
