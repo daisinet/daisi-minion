@@ -109,7 +109,7 @@ public sealed class MinionChatRenderer : IChatRenderer
         {
             // If the last message was already an assistant message being continued, don't add another
             if (messages.Count == 0 || messages[^1].Role != "assistant")
-                sb.Append("<|im_start|>assistant\n<think>\n");
+                sb.Append("<|im_start|>assistant\n");
         }
 
         return sb.ToString();
