@@ -32,7 +32,9 @@ public sealed class MinionEngine : IDisposable
     private DualModeOrchestrator? _dualMode;
     private readonly CancellationTokenSource _cts = new();
     private CancellationTokenSource? _inferenceCts;
+    private string _lastUserInput = "";
     private string _lastResponse = "";
+    private string _lastRenderedPrompt = "";
 
     // Layout components
     private LayoutManager? _layout;
@@ -119,8 +121,10 @@ public sealed class MinionEngine : IDisposable
                 continue;
             }
 
+            _lastUserInput = input;
             _renderer.WriteUserInput(input);
             await ProcessUserMessage(input);
+            _lastRenderedPrompt = _conversation?.RenderPrompt() ?? "";
         }
 
         _renderer.WriteInfo("Goodbye!");
@@ -496,26 +500,48 @@ public sealed class MinionEngine : IDisposable
             {
                 var text = lineBuffer.ToString();
                 var nlIdx = text.IndexOf('\n');
-                var line = text[..nlIdx];
+                var line = CleanLine(text[..nlIdx]);
                 lineBuffer.Clear();
                 lineBuffer.Append(text[(nlIdx + 1)..]);
 
-                if (firstLine) { _renderer.WriteLine(); firstLine = false; }
-                lineWriter.WriteLine(line);
+                if (line.Length > 0)
+                {
+                    if (firstLine) { _renderer.WriteLine(); firstLine = false; }
+                    lineWriter.WriteLine(line);
+                }
             }
         }
 
         // Flush remaining partial line
         if (lineBuffer.Length > 0)
         {
-            if (firstLine) { _renderer.WriteLine(); firstLine = false; }
-            lineWriter.WriteLine(lineBuffer.ToString());
+            var lastLine = CleanLine(lineBuffer.ToString());
+            if (lastLine.Length > 0)
+            {
+                if (firstLine) { _renderer.WriteLine(); firstLine = false; }
+                lineWriter.WriteLine(lastLine);
+            }
         }
         lineWriter.Finish();
         _renderer.WriteLine();
 
         _output?.UpdateStatus(s => s.SetIndicator("gen", $"{tokenCount} tok"));
         return fullResponse.ToString();
+    }
+
+    /// <summary>Strip thinking/action tags and other model artifacts from a display line.</summary>
+    private static string CleanLine(string line)
+    {
+        // Remove common tag artifacts that leak into model output
+        var cleaned = line;
+        foreach (var tag in new[] { "<think>", "</think>", "<thinking>", "</thinking>",
+                                     "<action>", "</action>", "<|im_end|>", "<|im_start|>" })
+        {
+            cleaned = cleaned.Replace(tag, "", StringComparison.OrdinalIgnoreCase);
+        }
+        // Strip trailing colons left by removed tags (e.g. "</thinking>:")
+        cleaned = cleaned.TrimEnd(':', ' ');
+        return cleaned;
     }
 
     private async Task TryLoadModelAsync()
@@ -913,18 +939,22 @@ public sealed class MinionEngine : IDisposable
         }
 
         _renderer.WriteLine();
-        _renderer.WriteInfoHeader("── Raw response ──");
+        _renderer.WriteInfoHeader("── Rendered prompt (sent to model) ──");
 
-        // Show the raw text with all tags, thinking, tool calls visible
-        // Escape nothing — dump exactly what the model produced
-        var escaped = _lastResponse
-            .Replace("\r\n", "\n")
-            .Replace("\r", "\n");
+        if (!string.IsNullOrEmpty(_lastRenderedPrompt))
+        {
+            var promptLines = _lastRenderedPrompt.Replace("\r", "").Split('\n');
+            foreach (var line in promptLines)
+                _renderer.WriteInfo(line);
+        }
 
-        foreach (var line in escaped.Split('\n'))
+        _renderer.WriteInfoHeader("── Raw model output ──");
+
+        var escaped = _lastResponse.Replace("\r", "").Split('\n');
+        foreach (var line in escaped)
             _renderer.WriteInfo(line);
 
-        _renderer.WriteInfoHeader("── End raw ──");
+        _renderer.WriteInfoHeader("── End ──");
         _renderer.WriteLine();
     }
 

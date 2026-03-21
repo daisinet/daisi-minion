@@ -30,6 +30,10 @@ public sealed class ConversationManager : IDisposable
     /// <summary>Number of tokens currently in the KV cache.</summary>
     public int ContextUsed => _session?.CachedTokenCount ?? 0;
 
+    /// <summary>Render the current conversation as it would be sent to the model (for debugging).</summary>
+    public string RenderPrompt() =>
+        _session?.History != null ? _renderer.Render(_session.History, addGenerationPrompt: true) : "";
+
     public ConversationManager(string systemPrompt, List<ToolDefinition> toolDefinitions)
     {
         _systemPrompt = systemPrompt;

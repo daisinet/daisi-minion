@@ -26,7 +26,7 @@ public sealed class MinionChatRenderer : IChatRenderer
         _tools = tools;
     }
 
-    public string[] GetStopSequences() => ["<|im_end|>", "</tool_call>"];
+    public string[] GetStopSequences() => ["<|im_end|>", "</tool_call>", "</think>", "</thinking>"];
 
     public string Render(IReadOnlyList<ChatMessage> messages, bool addGenerationPrompt = true)
     {
