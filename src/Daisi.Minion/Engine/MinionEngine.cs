@@ -443,6 +443,17 @@ public sealed class MinionEngine : IDisposable
             tokenCount++;
             InferenceLog.AppendToken(token);
 
+            // Live token count + tok/s — update during ALL phases including thinking
+            if (tokenCount % 5 == 0)
+            {
+                var count = tokenCount;
+                var elapsed = sw.Elapsed.TotalSeconds;
+                var tokPerSec = elapsed > 0.1 ? count / elapsed : 0;
+                var phase = thinkStripped ? "" : "thinking  ";
+                _output?.UpdateSpinnerMessage(s =>
+                    s.SetSpinnerMessage($"{phase}{count} tok  {tokPerSec:F1} tok/s"));
+            }
+
             // Phase 1: Buffer prefix to detect and strip <think>...</think>
             if (!thinkStripped)
             {
@@ -491,16 +502,6 @@ public sealed class MinionEngine : IDisposable
             else
             {
                 lineBuffer.Append(token);
-            }
-
-            // Live token count + tok/s — lightweight left-side-only update
-            if (tokenCount % 5 == 0)
-            {
-                var count = tokenCount;
-                var elapsed = sw.Elapsed.TotalSeconds;
-                var tokPerSec = elapsed > 0.1 ? count / elapsed : 0;
-                _output?.UpdateSpinnerMessage(s =>
-                    s.SetSpinnerMessage($"{count} tok  {tokPerSec:F1} tok/s"));
             }
 
             // Emit complete lines
