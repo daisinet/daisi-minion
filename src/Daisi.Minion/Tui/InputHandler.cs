@@ -12,6 +12,8 @@ public sealed class InputHandler
     private int _historyIndex = -1;
     private LayoutManager? _layout;
     private ConsoleOutput? _output;
+    private Action? _onCycleRole;
+    private Action? _onCyclePersona;
 
     /// <summary>Attach the layout manager and output for word-wrapping command bar display.</summary>
     public void SetLayout(LayoutManager layout, ConsoleOutput output)
@@ -19,6 +21,12 @@ public sealed class InputHandler
         _layout = layout;
         _output = output;
     }
+
+    /// <summary>Set the callback for Shift+Tab to cycle roles.</summary>
+    public void OnCycleRole(Action callback) => _onCycleRole = callback;
+
+    /// <summary>Set the callback for Ctrl+~ to cycle personas.</summary>
+    public void OnCyclePersona(Action callback) => _onCyclePersona = callback;
 
     /// <summary>
     /// Read a line of input with history navigation and word-wrapping command bar.
@@ -113,6 +121,10 @@ public sealed class InputHandler
                     }
                     break;
 
+                case ConsoleKey.Tab when key.Modifiers.HasFlag(ConsoleModifiers.Shift):
+                    _onCycleRole?.Invoke();
+                    break;
+
                 case ConsoleKey.Escape:
                     buffer.Clear();
                     cursor = 0;
@@ -122,6 +134,13 @@ public sealed class InputHandler
                 default:
                     if (key.KeyChar == '\x03' || key.KeyChar == '\x04') // Ctrl+C or Ctrl+D
                         return null;
+
+                    // Ctrl+` / Ctrl+~ (Oem3 key with Ctrl)
+                    if (key.Key == ConsoleKey.Oem3 && key.Modifiers.HasFlag(ConsoleModifiers.Control))
+                    {
+                        _onCyclePersona?.Invoke();
+                        break;
+                    }
 
                     if (key.KeyChar >= 32) // Printable
                     {

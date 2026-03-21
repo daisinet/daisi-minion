@@ -33,6 +33,10 @@ public sealed class ModelProfile
     [JsonPropertyName("context_size")]
     public int ContextSize { get; set; } = 8192;
 
+    /// <summary>Attention strategy: "full", "window:N", or "sinks:S,W".</summary>
+    [JsonPropertyName("attention")]
+    public string Attention { get; set; } = "full";
+
     private static readonly string ProfilesDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".daisi-minion", "models");
 
@@ -58,6 +62,13 @@ public sealed class ModelProfile
 
     /// <summary>Check if a profile exists for the given model file path.</summary>
     public static bool Exists(string modelFilePath) => File.Exists(GetProfilePath(modelFilePath));
+
+    /// <summary>Delete the profile for the given model file path.</summary>
+    public static void Delete(string modelFilePath)
+    {
+        var path = GetProfilePath(modelFilePath);
+        if (File.Exists(path)) File.Delete(path);
+    }
 
     private static string GetProfilePath(string modelFilePath)
     {

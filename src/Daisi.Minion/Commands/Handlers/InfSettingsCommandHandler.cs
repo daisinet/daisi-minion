@@ -5,7 +5,9 @@ namespace Daisi.Minion.Commands.Handlers;
 
 public sealed class InfSettingsCommandHandler(
     AnsiRenderer renderer,
-    ConfigManager configManager) : ISlashCommandHandler
+    ConfigManager configManager,
+    Func<string, CancellationToken, Task<ModelProfile?>> resetFunc,
+    Action onSettingsChanged) : ISlashCommandHandler
 {
     private static readonly Dictionary<string, string[]> Aliases = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -17,13 +19,19 @@ public sealed class InfSettingsCommandHandler(
         ["context_size"] = ["context_size", "ctx"],
     };
 
-    public Task HandleAsync(string args, CancellationToken ct)
+    public async Task HandleAsync(string args, CancellationToken ct)
     {
         var modelPath = configManager.Config.ActiveModel;
         if (string.IsNullOrEmpty(modelPath) || !File.Exists(modelPath))
         {
             renderer.WriteError("No model loaded.");
-            return Task.CompletedTask;
+            return;
+        }
+
+        if (args.Trim().Equals("reset", StringComparison.OrdinalIgnoreCase))
+        {
+            await ResetProfile(modelPath, ct);
+            return;
         }
 
         var profile = ModelProfile.Load(modelPath) ?? new ModelProfile
@@ -34,7 +42,7 @@ public sealed class InfSettingsCommandHandler(
         if (string.IsNullOrWhiteSpace(args))
         {
             ShowCurrent(profile);
-            return Task.CompletedTask;
+            return;
         }
 
         // Parse key=value pairs
@@ -47,7 +55,7 @@ public sealed class InfSettingsCommandHandler(
             if (eqIdx <= 0)
             {
                 renderer.WriteError($"Invalid format: {part} (expected key=value)");
-                return Task.CompletedTask;
+                return;
             }
 
             var key = part[..eqIdx].Trim();
@@ -56,7 +64,7 @@ public sealed class InfSettingsCommandHandler(
             if (!TryApply(profile, key, val, out var error))
             {
                 renderer.WriteError(error);
-                return Task.CompletedTask;
+                return;
             }
 
             changed.Add($"{key}={val}");
@@ -66,16 +74,40 @@ public sealed class InfSettingsCommandHandler(
 
         renderer.WriteSuccess($"Updated: {string.Join(", ", changed)}");
         ShowCurrent(profile);
-        return Task.CompletedTask;
+        renderer.WriteInfo("Reloading model...");
+        onSettingsChanged();
+    }
+
+    private async Task ResetProfile(string modelPath, CancellationToken ct)
+    {
+        ModelProfile.Delete(modelPath);
+        renderer.WriteInfo("Local profile removed. Fetching from HuggingFace...");
+
+        var profile = await resetFunc(modelPath, ct);
+        if (profile != null)
+        {
+            renderer.WriteSuccess("Profile restored from HuggingFace.");
+            ShowCurrent(profile);
+        }
+        else
+        {
+            var defaults = new ModelProfile { ModelId = Path.GetFileNameWithoutExtension(modelPath) };
+            defaults.Save(modelPath);
+            renderer.WriteInfo("HuggingFace lookup failed. Reset to defaults.");
+            ShowCurrent(defaults);
+        }
+        renderer.WriteInfo("Reloading model...");
+        onSettingsChanged();
     }
 
     private void ShowCurrent(ModelProfile profile)
     {
-        renderer.WriteInfo("Current inference settings:");
+        renderer.WriteInfoHeader("Current inference settings:");
         renderer.WriteInfo($"  temp={profile.Temperature}  top_k={profile.TopK}  top_p={profile.TopP}");
         renderer.WriteInfo($"  rep_pen={profile.RepetitionPenalty}  max={profile.MaxTokens}  ctx={profile.ContextSize}");
         renderer.WriteInfo("");
         renderer.WriteInfo("Usage: /inf-settings key=value [key=value ...]");
+        renderer.WriteInfo("       /inf-settings reset    Re-fetch from HuggingFace or reset to defaults");
         renderer.WriteInfo("Keys: temp, top_k, top_p, rep_pen, max, ctx");
     }
 

@@ -48,19 +48,17 @@ public sealed partial class AnsiRenderer
     }
 
     /// <summary>Write the startup banner.</summary>
-    public void WriteBanner()
+    public void WriteBanner(string name = "minion")
     {
-        WriteLine($"{Bold}{Cyan}daisi-minion{Reset} {Dim}— local AI coding assistant{Reset}");
-        WriteLine($"{Dim}Type /help for commands, Ctrl+C to exit{Reset}");
+        WriteLine($"{Bold}{Cyan}{name}{Reset} {Dim}— local AI assistant{Reset}");
+        WriteLine($"{Dim}Type /help for commands, Shift+Tab to cycle personas, Ctrl+C to exit{Reset}");
         WriteLine();
     }
 
     /// <summary>Echo the user's input into the content area with a muted background.</summary>
     public void WriteUserInput(string text)
     {
-        // Dark background bar with white text, full-width
-        var width = _output != null ? 0 : Console.WindowWidth; // 0 = let layout handle it
-        WriteLine($"{BgDarkGray}{White} > {text} {Reset}");
+        WriteLine($"{BgDarkGray}{White} ▶ {text} {Reset}");
     }
 
     /// <summary>Write a complete model response, rendered with markdown formatting.</summary>
@@ -88,6 +86,7 @@ public sealed partial class AnsiRenderer
     {
         private readonly AnsiRenderer _renderer;
         private bool _inCodeBlock;
+        private bool _inThinkBlock;
 
         internal MarkdownLineWriter(AnsiRenderer renderer)
         {
@@ -96,6 +95,51 @@ public sealed partial class AnsiRenderer
 
         /// <summary>Render and output a single line with markdown formatting.</summary>
         public void WriteLine(string line)
+        {
+            // Handle think tags — can appear inline or on their own line
+            var remaining = line;
+            while (remaining.Length > 0)
+            {
+                if (_inThinkBlock)
+                {
+                    var closeIdx = remaining.IndexOf("</think>", StringComparison.OrdinalIgnoreCase);
+                    if (closeIdx >= 0)
+                    {
+                        // Output thinking content up to the close tag
+                        var thinkContent = remaining[..closeIdx];
+                        if (thinkContent.Length > 0)
+                            _renderer.WriteLine($"{Dim}{Italic}  💭 {thinkContent}{Reset}");
+                        _inThinkBlock = false;
+                        remaining = remaining[(closeIdx + "</think>".Length)..];
+                        continue;
+                    }
+                    else
+                    {
+                        // Entire remaining line is thinking
+                        _renderer.WriteLine($"{Dim}{Italic}  💭 {remaining}{Reset}");
+                        return;
+                    }
+                }
+
+                var openIdx = remaining.IndexOf("<think>", StringComparison.OrdinalIgnoreCase);
+                if (openIdx >= 0)
+                {
+                    // Output any content before the think tag normally
+                    var before = remaining[..openIdx];
+                    if (before.Length > 0)
+                        WriteFormattedLine(before);
+                    _inThinkBlock = true;
+                    remaining = remaining[(openIdx + "<think>".Length)..];
+                    continue;
+                }
+
+                // No think tags — render normally
+                WriteFormattedLine(remaining);
+                return;
+            }
+        }
+
+        private void WriteFormattedLine(string line)
         {
             if (line.StartsWith("```"))
             {
@@ -134,6 +178,7 @@ public sealed partial class AnsiRenderer
                 _renderer.Write(Reset);
                 _inCodeBlock = false;
             }
+            _inThinkBlock = false;
         }
     }
 
@@ -167,19 +212,25 @@ public sealed partial class AnsiRenderer
     /// <summary>Write an error message with a muted red background.</summary>
     public void WriteError(string message)
     {
-        WriteLine($"{BgMutedRed}{White} Error: {message} {Reset}");
+        WriteLine($"{BgMutedRed}{White} ✗ {message} {Reset}");
     }
 
-    /// <summary>Write an info message.</summary>
+    /// <summary>Write an info message (continuation line, no icon).</summary>
     public void WriteInfo(string message)
     {
-        WriteLine($"{Dim}{message}{Reset}");
+        WriteLine($"{Gray}    {message}{Reset}");
     }
 
-    /// <summary>Write a success message.</summary>
+    /// <summary>Write a success message with icon.</summary>
     public void WriteSuccess(string message)
     {
-        WriteLine($"{Green}{message}{Reset}");
+        WriteLine($"{Green}  ✓ {message}{Reset}");
+    }
+
+    /// <summary>Write an info message with a leading icon (use for the first line of a block).</summary>
+    public void WriteInfoHeader(string message)
+    {
+        WriteLine($"{Gray}  ● {message}{Reset}");
     }
 
     /// <summary>Render markdown-formatted text with ANSI styling.</summary>

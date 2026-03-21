@@ -3,9 +3,9 @@ using System.Reflection;
 namespace Daisi.Minion.Engine;
 
 /// <summary>
-/// Loads persona definitions from ~/.daisi-minion/personas/.
-/// On first run, seeds the folder with built-in personas from embedded resources.
-/// Users can edit existing personas or drop new .md files into the folder.
+/// Loads personality trait definitions from ~/.daisi-minion/personas/.
+/// Traits like "witty", "charming", "sarcastic" affect the minion's communication style.
+/// Seeded from embedded Traits/ resources on first run.
 /// </summary>
 public sealed class PersonaManager
 {
@@ -20,47 +20,34 @@ public sealed class PersonaManager
         LoadFromDisk();
     }
 
-    /// <summary>All available persona names.</summary>
     public IReadOnlyList<string> Available => _personas.Keys.OrderBy(k => k).ToList();
-
-    /// <summary>The personas directory path.</summary>
     public static string Directory => PersonasDir;
-
-    /// <summary>Get the markdown content for a persona, or null if not found.</summary>
-    public string? GetContent(string name) =>
-        _personas.TryGetValue(name, out var content) ? content : null;
-
-    /// <summary>Check if a persona exists.</summary>
+    public string? GetContent(string name) => _personas.TryGetValue(name, out var c) ? c : null;
     public bool Exists(string name) => _personas.ContainsKey(name);
 
-    /// <summary>Reload all personas from disk.</summary>
     public void Reload()
     {
         _personas.Clear();
         LoadFromDisk();
     }
 
-    /// <summary>
-    /// Seed the personas directory with built-in defaults.
-    /// Only writes files that don't already exist, so user edits are preserved.
-    /// </summary>
     private static void SeedBuiltInPersonas()
     {
         System.IO.Directory.CreateDirectory(PersonasDir);
 
         var assembly = Assembly.GetExecutingAssembly();
-        var prefix = "Daisi.Minion.Personas.";
+        var prefix = "Daisi.Minion.Traits.";
 
         foreach (var resourceName in assembly.GetManifestResourceNames())
         {
             if (!resourceName.StartsWith(prefix) || !resourceName.EndsWith(".md"))
                 continue;
 
-            var fileName = resourceName[prefix.Length..]; // e.g. "coder.md"
+            var fileName = resourceName[prefix.Length..];
             var filePath = Path.Combine(PersonasDir, fileName);
 
             if (File.Exists(filePath))
-                continue; // Don't overwrite user edits
+                continue;
 
             using var stream = assembly.GetManifestResourceStream(resourceName);
             if (stream == null) continue;

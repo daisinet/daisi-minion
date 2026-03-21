@@ -15,7 +15,7 @@ public sealed class BackendCommandHandler(
         if (string.IsNullOrWhiteSpace(args))
         {
             var current = configManager.Config.Backend;
-            renderer.WriteInfo("Available backends:");
+            renderer.WriteInfoHeader("Available backends:");
             foreach (var b in ValidBackends)
             {
                 var marker = string.Equals(b, current, StringComparison.OrdinalIgnoreCase)

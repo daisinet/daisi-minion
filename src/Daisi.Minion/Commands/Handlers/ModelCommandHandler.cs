@@ -14,11 +14,13 @@ public sealed class ModelCommandHandler : ISlashCommandHandler
 {
     private readonly AnsiRenderer _renderer;
     private readonly ConfigManager _configManager;
+    private readonly Action _onModelChanged;
 
-    public ModelCommandHandler(AnsiRenderer renderer, ConfigManager configManager)
+    public ModelCommandHandler(AnsiRenderer renderer, ConfigManager configManager, Action onModelChanged)
     {
         _renderer = renderer;
         _configManager = configManager;
+        _onModelChanged = onModelChanged;
     }
 
     public async Task HandleAsync(string args, CancellationToken ct)
@@ -35,7 +37,7 @@ public sealed class ModelCommandHandler : ISlashCommandHandler
     private void ListModels()
     {
         var config = _configManager.Config;
-        _renderer.WriteInfo("Models directory: " + config.ModelsDirectory);
+        _renderer.WriteInfoHeader("Models directory: " + config.ModelsDirectory);
         _renderer.WriteInfo("");
 
         if (!Directory.Exists(config.ModelsDirectory))
@@ -106,7 +108,7 @@ public sealed class ModelCommandHandler : ISlashCommandHandler
             return;
         }
 
-        _renderer.WriteInfo($"Looking up {repoId}...");
+        _renderer.WriteInfoHeader($"Looking up {repoId}...");
 
         var hf = new HuggingFaceClient(_renderer);
         var files = await hf.ListGgufFilesAsync(repoId, ct);
@@ -119,7 +121,7 @@ public sealed class ModelCommandHandler : ISlashCommandHandler
 
         // Show options
         _renderer.WriteInfo("");
-        _renderer.WriteInfo("Available quantizations:");
+        _renderer.WriteInfoHeader("Available quantizations:");
         for (int i = 0; i < files.Count; i++)
             _renderer.WriteInfo($"  [{i + 1}] {files[i].FileName} ({files[i].SizeDisplay})");
 
@@ -151,7 +153,8 @@ public sealed class ModelCommandHandler : ISlashCommandHandler
                 _renderer.WriteSuccess($"Saved model profile (temp={profile.Temperature}, top_k={profile.TopK}, top_p={profile.TopP}, ctx={profile.ContextSize})");
             }
 
-            _renderer.WriteSuccess($"Model saved to {path}. Restart daisi-minion to use it.");
+            _renderer.WriteSuccess($"Model saved to {path}. Loading...");
+            _onModelChanged();
         }
     }
 
@@ -169,6 +172,7 @@ public sealed class ModelCommandHandler : ISlashCommandHandler
 
         _configManager.Config.ActiveModel = files[index - 1];
         _configManager.Save();
-        _renderer.WriteSuccess($"Active model set to {Path.GetFileName(files[index - 1])}. Restart daisi-minion to use it.");
+        _renderer.WriteSuccess($"Switching to {Path.GetFileName(files[index - 1])}...");
+        _onModelChanged();
     }
 }

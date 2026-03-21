@@ -24,9 +24,11 @@ public sealed class MinionEngine : IDisposable
     private readonly CodingToolRegistry _toolRegistry = new();
     private readonly SlashCommandDispatcher _commands = new();
     private readonly ProjectContext _projectContext;
+    private readonly RoleManager _roles = new();
     private readonly PersonaManager _personas = new();
     private ConversationManager? _conversation;
     private DaisiLlogosModelHandle? _modelHandle;
+    private int _activeContextSize;
     private DualModeOrchestrator? _dualMode;
     private readonly CancellationTokenSource _cts = new();
     private CancellationTokenSource? _inferenceCts;
@@ -57,7 +59,7 @@ public sealed class MinionEngine : IDisposable
     {
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; _cts.Cancel(); };
 
-        _renderer.WriteBanner();
+        _renderer.WriteBanner(_configManager.Config.MinionName);
 
         // Gather project context
         await _projectContext.RefreshAsync(_cts.Token);
@@ -107,6 +109,7 @@ public sealed class MinionEngine : IDisposable
 
                 if (!await _commands.ExecuteAsync(input, _cts.Token))
                     _renderer.WriteError($"Unknown command: {input}. Type /help for available commands.");
+                _renderer.WriteLine();
                 continue;
             }
 
@@ -129,23 +132,30 @@ public sealed class MinionEngine : IDisposable
         _output = new ConsoleOutput(_layout);
         _renderer.SetOutput(_output);
         _input.SetLayout(_layout, _output);
+        _input.OnCycleRole(CycleRole);
+        _input.OnCyclePersona(CyclePersona);
         _layout.Initialize();
     }
 
     private void SetInitialIndicators()
     {
+        _layout?.StatusBar.SetStatus(_configManager.Config.MinionName);
+
         if (_modelHandle != null)
             _layout?.StatusBar.SetIndicator("model", _modelHandle.ModelId);
 
         if (!string.IsNullOrEmpty(_projectContext.GitBranch))
             _layout?.StatusBar.SetIndicator("branch", _projectContext.GitBranch);
 
-        _layout?.StatusBar.SetIndicator("ctx", $"{_configManager.Config.ContextSize / 1024}k ctx");
+        _layout?.StatusBar.SetContextUsage(_conversation?.ContextUsed ?? 0, _activeContextSize);
         _layout?.StatusBar.SetIndicator("backend", _configManager.Config.Backend);
 
-        var persona = _configManager.Config.ActivePersona;
-        if (!string.IsNullOrEmpty(persona))
-            _layout?.SetPersonaLabel(persona);
+        var role = _configManager.Config.ActiveRole;
+        if (string.IsNullOrEmpty(role) || !_roles.Exists(role))
+            role = "chat";
+        _layout?.SetRoleLabel(role);
+
+        _layout?.SetPersonaLabel(_configManager.Config.ActivePersona);
 
         _layout?.UpdateStatusBar();
     }
@@ -172,9 +182,10 @@ public sealed class MinionEngine : IDisposable
                 _conversation!.SendAsync(input, parameters, ct), ct);
 
             // Agentic tool loop
-            while (ToolCallParser.ContainsToolCalls(fullResponse))
+            var toolFmt = MinionToolFormatter.Instance;
+            while (toolFmt.ContainsToolCalls(fullResponse))
             {
-                var toolCalls = ToolCallParser.Parse(fullResponse);
+                var toolCalls = toolFmt.ParseToolCalls(fullResponse);
                 if (toolCalls.Count == 0) break;
 
                 _output?.UpdateStatus(sb =>
@@ -186,8 +197,13 @@ public sealed class MinionEngine : IDisposable
 
                 var results = await toolExecutor.ExecuteToolCallsAsync(toolCalls, ct);
 
-                foreach (var result in results)
-                    _conversation.AddToolResult(result);
+                // Inject results and track file operations
+                for (int i = 0; i < results.Count; i++)
+                {
+                    var (name, output) = results[i];
+                    _conversation.AddToolResult(name, output);
+                    TrackFileFromToolCall(toolCalls[i]);
+                }
 
                 _output?.UpdateStatus(sb =>
                 {
@@ -204,17 +220,21 @@ public sealed class MinionEngine : IDisposable
             {
                 sb.StopSpinner();
                 sb.RemoveIndicator("gen");
-                sb.SetStatus("Ready");
+                sb.SetContextUsage(_conversation!.ContextUsed, _activeContextSize);
+                sb.SetStatus(_configManager.Config.MinionName);
             });
+
+            // Auto-compact if context usage >= 90%
+            await TryAutoCompact();
         }
         catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
         {
-            // Inference cancelled (double-Escape), not app shutdown
             _renderer.WriteInfo("(interrupted)");
             _output?.UpdateStatus(sb =>
             {
                 sb.StopSpinner();
                 sb.RemoveIndicator("gen");
+                sb.SetContextUsage(_conversation?.ContextUsed ?? 0, _activeContextSize);
                 sb.SetStatus("Interrupted");
             });
         }
@@ -244,6 +264,122 @@ public sealed class MinionEngine : IDisposable
     /// Poll for double-Escape keypress during inference. Two Escape keys within 500ms cancels.
     /// Consumes only Escape keys; other keys are ignored.
     /// </summary>
+    private async Task RunGoalAsync(string goal, int maxIterations)
+    {
+        if (_conversation == null || !_conversation.HasSession)
+        {
+            _renderer.WriteError("No model loaded. Use /model to load a model.");
+            return;
+        }
+
+        _renderer.WriteUserInput($"Goal: {goal}");
+
+        // Send the initial goal message with autonomous instructions
+        var goalPrompt = $"""
+            Your goal: {goal}
+
+            Work toward this goal autonomously. Use your tools to explore, read files, make changes, run commands — whatever is needed.
+
+            After each step, evaluate your progress:
+            - If the goal is NOT yet complete, explain what you'll do next and continue working.
+            - If the goal IS complete, respond with exactly "GOAL_COMPLETE" on its own line, followed by a brief summary of what was accomplished.
+
+            Do not ask the user for input. Make decisions yourself and keep going.
+            """;
+
+        _inferenceCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        var ct = _inferenceCts.Token;
+        _ = Task.Run(() => ListenForEscapeCancel(_inferenceCts));
+
+        try
+        {
+            for (int iteration = 1; iteration <= maxIterations; iteration++)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                _output?.UpdateStatus(sb =>
+                {
+                    sb.StopSpinner();
+                    sb.SetIndicator("goal", $"goal {iteration}/{maxIterations}");
+                    sb.StartSpinner($"Goal iteration {iteration}...", () =>
+                        _output?.TickSpinner());
+                });
+
+                var message = iteration == 1 ? goalPrompt : "Continue working toward the goal. If complete, respond with GOAL_COMPLETE.";
+
+                var fullResponse = await StreamByLine(
+                    _conversation.SendAsync(message, GetGenerationParams(), ct), ct);
+
+                // Run tool calls
+                var toolFmt = MinionToolFormatter.Instance;
+                while (toolFmt.ContainsToolCalls(fullResponse))
+                {
+                    var toolCalls = toolFmt.ParseToolCalls(fullResponse);
+                    if (toolCalls.Count == 0) break;
+
+                    _output?.UpdateStatus(sb =>
+                    {
+                        sb.StopSpinner();
+                        sb.StartSpinner($"Running {toolCalls.Count} tool(s)...", () =>
+                            _output?.TickSpinner());
+                    });
+
+                    var toolExecutor = new ToolExecutor(_toolRegistry, _renderer);
+                    var results = await toolExecutor.ExecuteToolCallsAsync(toolCalls, ct);
+
+                    for (int j = 0; j < results.Count; j++)
+                    {
+                        var (name, output) = results[j];
+                        _conversation.AddToolResult(name, output);
+                        TrackFileFromToolCall(toolCalls[j]);
+                    }
+
+                    _output?.UpdateStatus(sb =>
+                    {
+                        sb.StopSpinner();
+                        sb.StartSpinner($"Goal iteration {iteration}...", () =>
+                            _output?.TickSpinner());
+                    });
+
+                    fullResponse = await StreamByLine(
+                        _conversation.ResumeAsync(GetGenerationParams(), ct), ct);
+                }
+
+                // Check if the model declared the goal complete
+                if (fullResponse.Contains("GOAL_COMPLETE", StringComparison.OrdinalIgnoreCase))
+                {
+                    _renderer.WriteSuccess($"Goal completed in {iteration} iteration(s).");
+                    break;
+                }
+
+                if (iteration == maxIterations)
+                {
+                    _renderer.WriteInfo($"Reached max iterations ({maxIterations}). Goal may not be fully complete.");
+                }
+            }
+        }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
+        {
+            _renderer.WriteInfo("(goal interrupted)");
+        }
+        catch (Exception ex)
+        {
+            _renderer.WriteError($"Goal failed: {ex.Message}");
+        }
+        finally
+        {
+            _output?.UpdateStatus(sb =>
+            {
+                sb.StopSpinner();
+                sb.RemoveIndicator("gen");
+                sb.RemoveIndicator("goal");
+                sb.SetStatus(_configManager.Config.MinionName);
+            });
+            _inferenceCts?.Dispose();
+            _inferenceCts = null;
+        }
+    }
+
     private static void ListenForEscapeCancel(CancellationTokenSource inferenceCts)
     {
         var lastEscape = DateTime.MinValue;
@@ -288,8 +424,15 @@ public sealed class MinionEngine : IDisposable
             lineBuffer.Append(token);
             tokenCount++;
 
-            if (tokenCount % 5 == 0)
-                _output?.UpdateStatus(s => s.SetIndicator("gen", $"{tokenCount} tok"));
+            if (tokenCount % 10 == 0)
+            {
+                var count = tokenCount;
+                _output?.UpdateStatus(s =>
+                {
+                    s.SetIndicator("gen", $"{count} tok");
+                    s.SetContextUsage(_conversation?.ContextUsed ?? 0, _activeContextSize);
+                });
+            }
 
             // Emit complete lines
             while (lineBuffer.ToString().Contains('\n'))
@@ -339,7 +482,7 @@ public sealed class MinionEngine : IDisposable
             return;
         }
 
-        _renderer.WriteInfo($"Loading {Path.GetFileName(modelPath)}...");
+        _renderer.WriteInfoHeader($"Loading {Path.GetFileName(modelPath)}...");
 
         // Apply thread count limit to CPU backend
         Daisi.Llogos.Cpu.CpuThreading.ThreadCount = _configManager.Config.ThreadCount;
@@ -367,6 +510,7 @@ public sealed class MinionEngine : IDisposable
             });
 
             _modelHandle = ((DaisiLlogosModelHandleAdapter)handleAdapter).Inner;
+            _activeContextSize = contextSize;
             if (profile != null)
                 _renderer.WriteInfo($"Profile: temp={profile.Temperature}, top_k={profile.TopK}, top_p={profile.TopP}, ctx={contextSize}");
             _renderer.WriteSuccess($"Loaded {_modelHandle.ModelId} ({_modelHandle.Config.Architecture}, {_modelHandle.Config.NumLayers}L, {_modelHandle.Config.HiddenDim}D)");
@@ -386,7 +530,7 @@ public sealed class MinionEngine : IDisposable
         var fileName = Path.GetFileName(modelPath);
         var modelName = Path.GetFileNameWithoutExtension(modelPath);
 
-        _renderer.WriteInfo($"No local profile found. Searching HuggingFace for {modelName}...");
+        _renderer.WriteInfoHeader($"No local profile found. Searching HuggingFace for {modelName}...");
 
         try
         {
@@ -487,6 +631,49 @@ public sealed class MinionEngine : IDisposable
     }
 
     /// <summary>Strip common GGUF quantization suffixes to get the base model name.</summary>
+    private async Task TryAutoCompact()
+    {
+        if (_conversation == null) return;
+
+        var used = _conversation.ContextUsed;
+        var pct = _activeContextSize > 0 ? (double)used / _activeContextSize : 0;
+
+        if (pct >= 0.90 && (_conversation.History?.Count ?? 0) >= 6)
+        {
+            _renderer.WriteInfo($"Context {pct:P0} full — auto-compacting...");
+            try
+            {
+                await _conversation.CompactAsync(GetGenerationParams(), _cts.Token);
+                var newUsed = _conversation.ContextUsed;
+                _output?.UpdateStatus(sb =>
+                    sb.SetContextUsage(newUsed, _activeContextSize));
+                _renderer.WriteSuccess($"Compacted. Context: {newUsed / 1024.0:F1}k / {_activeContextSize / 1024}k");
+            }
+            catch (Exception ex)
+            {
+                _renderer.WriteError($"Auto-compact failed: {ex.Message}");
+            }
+        }
+    }
+
+    private void TrackFileFromToolCall(ToolCall call)
+    {
+        if (!call.Arguments.TryGetPropertyValue("path", out var pathNode)) return;
+        var path = pathNode?.GetValue<string>();
+        if (string.IsNullOrEmpty(path)) return;
+
+        switch (call.Name)
+        {
+            case "file_read":
+                _conversation?.TrackFileRead(path);
+                break;
+            case "file_write":
+            case "file_edit":
+                _conversation?.TrackFileModified(path);
+                break;
+        }
+    }
+
     private static string StripQuantSuffix(string name)
     {
         // Common patterns: Model-Q4_K_M, Model-q8_0, Model-IQ2_M, Model-f16
@@ -521,7 +708,7 @@ public sealed class MinionEngine : IDisposable
             return only;
         }
 
-        _renderer.WriteInfo("Available models:");
+        _renderer.WriteInfoHeader("Available models:");
         Console.WriteLine();
         for (int i = 0; i < ggufFiles.Count; i++)
         {
@@ -570,10 +757,23 @@ public sealed class MinionEngine : IDisposable
     private string BuildSystemPrompt()
     {
         var sb = new StringBuilder();
-        sb.AppendLine("You are daisi-minion, a local AI assistant.");
+        var minionName = _configManager.Config.MinionName;
+        sb.AppendLine($"You are {minionName}, a local AI assistant.");
         sb.AppendLine();
 
-        // Inject persona
+        // Inject role — fall back to "chat" if saved role doesn't exist
+        var roleName = _configManager.Config.ActiveRole;
+        if (string.IsNullOrEmpty(roleName) || !_roles.Exists(roleName))
+            roleName = "chat";
+
+        var roleContent = _roles.GetContent(roleName);
+        if (roleContent != null)
+        {
+            sb.AppendLine(roleContent);
+            sb.AppendLine();
+        }
+
+        // Inject personality trait (persona)
         var personaName = _configManager.Config.ActivePersona;
         if (!string.IsNullOrEmpty(personaName))
         {
@@ -604,38 +804,131 @@ public sealed class MinionEngine : IDisposable
         _commands.Register("help", new HelpCommandHandler(_renderer));
         _commands.Register("clear", new ClearCommandHandler(_conversation!, _renderer));
         _commands.Register("compact", new CompactCommandHandler(_conversation!, _renderer, GetGenerationParams));
-        _commands.Register("model", new ModelCommandHandler(_renderer, _configManager));
+        _commands.Register("model", new ModelCommandHandler(_renderer, _configManager, ReloadModel));
+        _commands.Register("role", new RoleCommandHandler(_renderer, _roles, _configManager, () =>
+        {
+            _conversation?.Dispose();
+            InitializeConversation();
+            var name = _configManager.Config.ActiveRole;
+            if (string.IsNullOrEmpty(name) || !_roles.Exists(name)) name = "chat";
+            _layout?.SetRoleLabel(name);
+            _output?.RedrawCommandBar("", 0);
+        }));
         _commands.Register("persona", new PersonaCommandHandler(_renderer, _personas, _configManager, () =>
         {
             _conversation?.Dispose();
             InitializeConversation();
-            var name = _configManager.Config.ActivePersona;
-            _layout?.SetPersonaLabel(name ?? "");
+            _layout?.SetPersonaLabel(_configManager.Config.ActivePersona);
             _output?.RedrawCommandBar("", 0);
         }));
         _commands.Register("backend", new BackendCommandHandler(_renderer, _configManager, name =>
         {
             _layout?.StatusBar.SetIndicator("backend", name);
             _layout?.UpdateStatusBar();
-            // Reload model with new backend
-            Task.Run(async () =>
+            ReloadModel();
+        }));
+        _commands.Register("inf-settings", new InfSettingsCommandHandler(_renderer, _configManager,
+            async (modelPath, ct) => await TryFetchProfileFromHuggingFace(modelPath),
+            ReloadModel));
+        _commands.Register("attention", new AttentionCommandHandler(_renderer, _configManager, ReloadModel));
+        _commands.Register("name", new NameCommandHandler(_renderer, _configManager, name =>
+        {
+            _layout?.StatusBar.SetIndicator("name", name);
+            _layout?.UpdateStatusBar();
+            _conversation?.Dispose();
+            InitializeConversation();
+        }));
+        _commands.Register("goal", new GoalCommandHandler(_renderer, RunGoalAsync));
+    }
+
+    private void CycleRole()
+    {
+        var available = _roles.Available;
+        if (available.Count == 0) return;
+
+        var current = _configManager.Config.ActiveRole ?? "chat";
+        var idx = -1;
+        for (var i = 0; i < available.Count; i++)
+            if (string.Equals(available[i], current, StringComparison.OrdinalIgnoreCase)) { idx = i; break; }
+        var next = available[(idx + 1) % available.Count];
+
+        _configManager.Config.ActiveRole = next;
+        _configManager.Save();
+
+        _conversation?.Dispose();
+        InitializeConversation();
+
+        _layout?.SetRoleLabel(next);
+        _output?.RedrawCommandBar("", 0);
+        _renderer.WriteSuccess($"Role: {next}");
+        _renderer.WriteLine();
+    }
+
+    private void CyclePersona()
+    {
+        var available = _personas.Available;
+        // Cycle: none → first → second → ... → last → none
+        var current = _configManager.Config.ActivePersona;
+
+        string? next;
+        if (string.IsNullOrEmpty(current))
+        {
+            next = available.Count > 0 ? available[0] : null;
+        }
+        else
+        {
+            var idx = -1;
+            for (var i = 0; i < available.Count; i++)
+                if (string.Equals(available[i], current, StringComparison.OrdinalIgnoreCase)) { idx = i; break; }
+            next = idx + 1 < available.Count ? available[idx + 1] : null;
+        }
+
+        _configManager.Config.ActivePersona = next;
+        _configManager.Save();
+
+        _conversation?.Dispose();
+        InitializeConversation();
+
+        _layout?.SetPersonaLabel(next);
+        _output?.RedrawCommandBar("", 0);
+        _renderer.WriteSuccess($"Persona: {next ?? "none"}");
+        _renderer.WriteLine();
+    }
+
+    private void ReloadModel()
+    {
+        Task.Run(async () =>
+        {
+            try
             {
+                // Dispose in dependency order: conversation → dual-mode → model
                 _conversation?.Dispose();
                 _conversation = null;
-                _dualMode?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-                _dualMode = null;
+
+                if (_dualMode != null)
+                {
+                    await _dualMode.DisposeAsync();
+                    _dualMode = null;
+                }
+
                 _modelHandle?.Dispose();
                 _modelHandle = null;
+
+                // Allow GPU resources to fully release before creating new context
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+
                 await TryLoadModelAsync();
                 InitializeConversation();
                 InitializeDualMode();
-                // Update model indicator
-                if (_modelHandle != null)
-                    _output?.UpdateStatus(sb => sb.SetIndicator("model", _modelHandle.ModelId));
+                SetInitialIndicators();
                 _renderer.WriteSuccess("Model reloaded.");
-            });
-        }));
-        _commands.Register("inf-settings", new InfSettingsCommandHandler(_renderer, _configManager));
+            }
+            catch (Exception ex)
+            {
+                _renderer.WriteError($"Reload failed: {ex.Message}");
+            }
+        });
     }
 
     private GenerationParams GetGenerationParams()

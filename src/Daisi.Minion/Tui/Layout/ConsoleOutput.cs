@@ -43,12 +43,12 @@ public sealed class ConsoleOutput
         }
     }
 
-    /// <summary>Thread-safe spinner-only update — only rewrites the spinner character, not the full line.</summary>
+    /// <summary>Thread-safe spinner tick — redraws the full status bar to keep indicators current.</summary>
     public void TickSpinner()
     {
         lock (_writeLock)
         {
-            _layout.UpdateSpinnerChar();
+            _layout.UpdateStatusBar();
         }
     }
 

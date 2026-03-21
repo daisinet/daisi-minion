@@ -32,8 +32,16 @@ public sealed class MinionConfig
     [JsonPropertyName("temperature")]
     public float Temperature { get; set; } = 0.7f;
 
+    /// <summary>Active role (coder, cto, chat, etc.).</summary>
+    [JsonPropertyName("active_role")]
+    public string? ActiveRole { get; set; } = "chat";
+
+    /// <summary>Active persona / personality trait (witty, dry, sarcastic, etc.). Null = none.</summary>
     [JsonPropertyName("active_persona")]
-    public string? ActivePersona { get; set; } = "coder";
+    public string? ActivePersona { get; set; }
+
+    [JsonPropertyName("minion_name")]
+    public string MinionName { get; set; } = "minion";
 
     [JsonPropertyName("models")]
     public List<ModelEntry> Models { get; set; } = [];

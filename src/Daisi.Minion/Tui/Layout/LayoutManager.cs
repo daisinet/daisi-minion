@@ -25,6 +25,7 @@ public sealed class LayoutManager : IDisposable
     private int _lastCursorRow;
     private int _lastCursorCol;
     private string _personaLabel = "";
+    private string _roleLabel = "";
     private Timer? _resizeTimer;
 
     public StatusBar StatusBar { get; } = new();
@@ -42,10 +43,16 @@ public sealed class LayoutManager : IDisposable
     /// <summary>Current terminal width.</summary>
     public int Width => _termWidth;
 
-    /// <summary>Set the persona label shown on the bottom border of the command bar.</summary>
-    public void SetPersonaLabel(string name)
+    /// <summary>Set the persona (personality trait) label.</summary>
+    public void SetPersonaLabel(string? name)
     {
         _personaLabel = string.IsNullOrEmpty(name) ? "" : $" {name} ";
+    }
+
+    /// <summary>Set the role label.</summary>
+    public void SetRoleLabel(string name)
+    {
+        _roleLabel = string.IsNullOrEmpty(name) ? "" : $" {name} ";
     }
 
     // --- Windows VT100 support ---
@@ -168,13 +175,17 @@ public sealed class LayoutManager : IDisposable
                 buf.Append(lines[i]);
         }
 
-        // Orange bottom border with persona label
+        // Orange bottom border with persona + role labels on the right
         buf.Append($"{Esc}{OrangeBottomRow};1H{Esc}2K");
-        if (_personaLabel.Length > 0 && _personaLabel.Length < _termWidth - 4)
+        var combinedLabel = _personaLabel + _roleLabel;
+        if (combinedLabel.Length > 0 && combinedLabel.Length < _termWidth - 4)
         {
-            var borderLen = _termWidth - _personaLabel.Length;
+            var borderLen = _termWidth - combinedLabel.Length;
             buf.Append($"{Orange}{new string('\u2500', borderLen)}{Reset}");
-            buf.Append($"{OrangeBg}{Black}{_personaLabel}{Reset}");
+            if (_personaLabel.Length > 0)
+                buf.Append($"{OrangeBg}{Black}{_personaLabel}{Reset}");
+            if (_roleLabel.Length > 0)
+                buf.Append($"{OrangeBg}{Black}{_roleLabel}{Reset}");
         }
         else
         {

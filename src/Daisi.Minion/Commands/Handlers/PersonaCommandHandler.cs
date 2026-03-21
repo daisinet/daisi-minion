@@ -25,6 +25,16 @@ public sealed class PersonaCommandHandler(
             return Task.CompletedTask;
         }
 
+        if (args.Trim().Equals("none", StringComparison.OrdinalIgnoreCase))
+        {
+            configManager.Config.ActivePersona = null;
+            configManager.Save();
+            renderer.WriteSuccess("Persona cleared.");
+            renderer.WriteInfo("Conversation reset.");
+            onPersonaChanged();
+            return Task.CompletedTask;
+        }
+
         var personaName = args.Trim();
         if (!personas.Exists(personaName))
         {
@@ -47,7 +57,8 @@ public sealed class PersonaCommandHandler(
     private void ListPersonas()
     {
         var current = configManager.Config.ActivePersona;
-        renderer.WriteInfo("Available personas:");
+        renderer.WriteInfoHeader("Available personas (personality traits):");
+        renderer.WriteInfo($"  none{(string.IsNullOrEmpty(current) ? " \x1b[32m(active)\x1b[0m" : "")}");
         foreach (var name in personas.Available)
         {
             var marker = string.Equals(name, current, StringComparison.OrdinalIgnoreCase)
@@ -56,9 +67,10 @@ public sealed class PersonaCommandHandler(
         }
         renderer.WriteInfo("");
         renderer.WriteInfo($"Personas folder: {PersonaManager.Directory}");
-        renderer.WriteInfo("Drop .md files there to add custom personas, or edit existing ones.");
+        renderer.WriteInfo("Drop .md files there to add custom personas.");
         renderer.WriteInfo("");
-        renderer.WriteInfo("Usage: /persona <name>    Switch persona");
+        renderer.WriteInfo("Usage: /persona <name>    Set personality trait");
+        renderer.WriteInfo("       /persona none      Clear persona");
         renderer.WriteInfo("       /persona reload    Reload from disk");
     }
 }

@@ -11,7 +11,7 @@ public sealed class CompactCommandHandler(
 {
     public async Task HandleAsync(string args, CancellationToken ct)
     {
-        renderer.WriteInfo("Compacting conversation...");
+        renderer.WriteInfoHeader("Compacting conversation...");
         await conversation.CompactAsync(getParams(), ct);
         renderer.WriteSuccess("Conversation compacted.");
     }
