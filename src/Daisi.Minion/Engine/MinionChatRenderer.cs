@@ -110,9 +110,10 @@ public sealed class MinionChatRenderer : IChatRenderer
             // If the last message was already an assistant message being continued, don't add another
             if (messages.Count == 0 || messages[^1].Role != "assistant")
             {
-                // Non-thinking format for Qwen 3.5 small models (0.8B-9B) where
-                // reasoning is off by default. Empty think block = respond directly.
-                sb.Append("<|im_start|>assistant\n<think>\n\n</think>\n\n");
+                // Qwen 3.5 thinking mode (default for unsloth GGUF builds).
+                // Open <think> tag lets the model reason before responding or
+                // calling tools. StreamByLine strips thinking from display.
+                sb.Append("<|im_start|>assistant\n<think>\n");
             }
         }
 
@@ -124,29 +125,21 @@ public sealed class MinionChatRenderer : IChatRenderer
     {
         var content = msg.Content ?? "";
 
-        // Extract thinking content if present
-        string thinkContent = "";
-        string mainContent = content;
-
+        // Per Qwen 3.5 docs: "Historical model outputs should only include the
+        // final output part without thinking content." Strip <think>...</think>.
         if (content.Contains("</think>"))
         {
             var thinkEnd = content.IndexOf("</think>", StringComparison.Ordinal);
-            var thinkStart = content.IndexOf("<think>", StringComparison.Ordinal);
-            if (thinkStart >= 0)
-                thinkContent = content[(thinkStart + 7)..thinkEnd].Trim();
-            else
-                thinkContent = content[..thinkEnd].Trim();
-            mainContent = content[(thinkEnd + 8)..].TrimStart();
+            content = content[(thinkEnd + 8)..].TrimStart();
+        }
+        else if (content.TrimStart().StartsWith("<think>"))
+        {
+            // Unclosed think block — strip the tag
+            var idx = content.IndexOf("<think>", StringComparison.Ordinal);
+            content = content[(idx + 7)..].TrimStart();
         }
 
-        // For messages after the last user query in multi-step tool scenarios,
-        // include thinking tags
-        if (index > lastQueryIndex && (isLast || thinkContent.Length > 0))
-            sb.Append("<|im_start|>assistant\n<think>\n").Append(thinkContent).Append("\n</think>\n\n").Append(mainContent);
-        else
-            sb.Append("<|im_start|>assistant\n").Append(mainContent);
-
-        sb.Append("<|im_end|>\n");
+        sb.Append("<|im_start|>assistant\n").Append(content).Append("<|im_end|>\n");
     }
 
     private static void RenderToolResponse(StringBuilder sb, ChatMessage msg, int index,
