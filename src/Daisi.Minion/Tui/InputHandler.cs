@@ -14,6 +14,8 @@ public sealed class InputHandler
     private ConsoleOutput? _output;
     private Action? _onCycleRole;
     private Action? _onCyclePersona;
+    private Action? _onShowLastResponse;
+    private DateTime _lastDownArrow = DateTime.MinValue;
 
     /// <summary>Attach the layout manager and output for word-wrapping command bar display.</summary>
     public void SetLayout(LayoutManager layout, ConsoleOutput output)
@@ -27,6 +29,9 @@ public sealed class InputHandler
 
     /// <summary>Set the callback for Ctrl+~ to cycle personas.</summary>
     public void OnCyclePersona(Action callback) => _onCyclePersona = callback;
+
+    /// <summary>Set the callback for double-tap down arrow to show last response.</summary>
+    public void OnShowLastResponse(Action callback) => _onShowLastResponse = callback;
 
     /// <summary>
     /// Read a line of input with history navigation and word-wrapping command bar.
@@ -109,15 +114,26 @@ public sealed class InputHandler
                     break;
 
                 case ConsoleKey.DownArrow:
-                    if (_historyIndex < _history.Count - 1)
+                    var now = DateTime.UtcNow;
+                    if ((now - _lastDownArrow).TotalMilliseconds < 300)
                     {
-                        _historyIndex++;
-                        SetBuffer(buffer, _history[_historyIndex], ref cursor);
+                        // Double-tap: show raw last response
+                        _onShowLastResponse?.Invoke();
+                        _lastDownArrow = DateTime.MinValue;
                     }
-                    else if (_historyIndex == _history.Count - 1)
+                    else
                     {
-                        _historyIndex = _history.Count;
-                        SetBuffer(buffer, "", ref cursor);
+                        _lastDownArrow = now;
+                        if (_historyIndex < _history.Count - 1)
+                        {
+                            _historyIndex++;
+                            SetBuffer(buffer, _history[_historyIndex], ref cursor);
+                        }
+                        else if (_historyIndex == _history.Count - 1)
+                        {
+                            _historyIndex = _history.Count;
+                            SetBuffer(buffer, "", ref cursor);
+                        }
                     }
                     break;
 

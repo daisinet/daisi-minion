@@ -32,6 +32,7 @@ public sealed class MinionEngine : IDisposable
     private DualModeOrchestrator? _dualMode;
     private readonly CancellationTokenSource _cts = new();
     private CancellationTokenSource? _inferenceCts;
+    private string _lastResponse = "";
 
     // Layout components
     private LayoutManager? _layout;
@@ -134,6 +135,7 @@ public sealed class MinionEngine : IDisposable
         _input.SetLayout(_layout, _output);
         _input.OnCycleRole(CycleRole);
         _input.OnCyclePersona(CyclePersona);
+        _input.OnShowLastResponse(ShowRawLastResponse);
         _layout.Initialize();
     }
 
@@ -215,6 +217,8 @@ public sealed class MinionEngine : IDisposable
                 fullResponse = await StreamByLine(
                     _conversation.ResumeAsync(parameters, ct), ct);
             }
+
+            _lastResponse = fullResponse;
 
             _output?.UpdateStatus(sb =>
             {
@@ -839,6 +843,30 @@ public sealed class MinionEngine : IDisposable
             InitializeConversation();
         }));
         _commands.Register("goal", new GoalCommandHandler(_renderer, RunGoalAsync));
+    }
+
+    private void ShowRawLastResponse()
+    {
+        if (string.IsNullOrEmpty(_lastResponse))
+        {
+            _renderer.WriteInfo("(no response yet)");
+            return;
+        }
+
+        _renderer.WriteLine();
+        _renderer.WriteInfoHeader("── Raw response ──");
+
+        // Show the raw text with all tags, thinking, tool calls visible
+        // Escape nothing — dump exactly what the model produced
+        var escaped = _lastResponse
+            .Replace("\r\n", "\n")
+            .Replace("\r", "\n");
+
+        foreach (var line in escaped.Split('\n'))
+            _renderer.WriteInfo(line);
+
+        _renderer.WriteInfoHeader("── End raw ──");
+        _renderer.WriteLine();
     }
 
     private void CycleRole()
