@@ -62,26 +62,25 @@ public sealed class MinionEngine : IDisposable
 
         _renderer.WriteBanner(_configManager.Config.MinionName);
 
-        // Gather project context
-        await _projectContext.RefreshAsync(_cts.Token);
+        using (var spin = new Tui.StartupSpinner("Scanning project..."))
+        {
+            await _projectContext.RefreshAsync(_cts.Token);
+            spin.Finish("Project scanned");
+        }
 
-        // Try to load the configured model
         await TryLoadModelAsync();
 
-        // Initialize layout (after model load so banner/load messages appear above)
-        InitializeLayout();
-
-        // Initialize conversation
-        InitializeConversation();
-
-        // Initialize dual-mode (host when idle)
-        InitializeDualMode();
-
-        // Register slash commands
-        RegisterCommands();
-
-        // Set status bar indicators
-        SetInitialIndicators();
+        using (var spin = new Tui.StartupSpinner("Initializing..."))
+        {
+            InitializeLayout();
+            spin.Update("Building conversation...");
+            InitializeConversation();
+            spin.Update("Starting services...");
+            InitializeDualMode();
+            RegisterCommands();
+            SetInitialIndicators();
+            spin.Finish("Ready");
+        }
 
         // Main loop
         while (!_cts.IsCancellationRequested)
@@ -540,15 +539,16 @@ public sealed class MinionEngine : IDisposable
             return;
         }
 
-        _renderer.WriteInfoHeader($"Loading {Path.GetFileName(modelPath)}...");
-
         // Apply thread count limit to CPU backend
         Daisi.Llogos.Cpu.CpuThreading.ThreadCount = _configManager.Config.ThreadCount;
+
+        var modelFileName = Path.GetFileName(modelPath);
+        using var loadSpinner = new Tui.StartupSpinner($"Loading {modelFileName}...");
 
         try
         {
             var backend = new DaisiLlogosTextBackend();
-            backend.OnLog = msg => _renderer.WriteInfo(msg);
+            backend.OnLog = msg => loadSpinner.Update(msg);
             await backend.ConfigureAsync(new Daisi.Inference.Models.BackendConfiguration
             {
                 Runtime = _configManager.Config.Backend,
@@ -557,9 +557,13 @@ public sealed class MinionEngine : IDisposable
             // Use per-model profile if available; fetch from HuggingFace if missing
             var profile = ModelProfile.Load(modelPath);
             if (profile == null)
+            {
+                loadSpinner.Update("Fetching profile from HuggingFace...");
                 profile = await TryFetchProfileFromHuggingFace(modelPath);
+            }
             var contextSize = profile?.ContextSize ?? _configManager.Config.ContextSize;
 
+            loadSpinner.Update($"Loading weights ({modelFileName})...");
             var handleAdapter = await backend.LoadModelAsync(new Daisi.Inference.Models.ModelLoadRequest
             {
                 ModelId = Path.GetFileNameWithoutExtension(modelPath),
@@ -569,13 +573,11 @@ public sealed class MinionEngine : IDisposable
 
             _modelHandle = ((DaisiLlogosModelHandleAdapter)handleAdapter).Inner;
             _activeContextSize = contextSize;
-            if (profile != null)
-                _renderer.WriteInfo($"Profile: temp={profile.Temperature}, top_k={profile.TopK}, top_p={profile.TopP}, ctx={contextSize}");
-            _renderer.WriteSuccess($"Loaded {_modelHandle.ModelId} ({_modelHandle.Config.Architecture}, {_modelHandle.Config.NumLayers}L, {_modelHandle.Config.HiddenDim}D)");
+            loadSpinner.Finish($"{_modelHandle.ModelId} ({_modelHandle.Config.Architecture}, {_modelHandle.Config.NumLayers}L, ctx={contextSize})");
         }
         catch (Exception ex)
         {
-            _renderer.WriteError($"Failed to load model: {ex.Message}");
+            loadSpinner.Fail($"Failed to load: {ex.Message}");
         }
     }
 
