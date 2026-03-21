@@ -35,6 +35,7 @@ public sealed class MinionEngine : IDisposable
     private string _lastUserInput = "";
     private string _lastResponse = "";
     private string _lastRenderedPrompt = "";
+    private string _spinnerBase = "Thinking...";
 
     // Layout components
     private LayoutManager? _layout;
@@ -178,9 +179,18 @@ public sealed class MinionEngine : IDisposable
         // Listen for double-Escape in the background to cancel inference
         _ = Task.Run(() => ListenForEscapeCancel(_inferenceCts));
 
-        // Show spinner while generating
-        _output?.UpdateStatus(sb => sb.StartSpinner("Thinking...", () =>
-            _output?.TickSpinner()));
+        // Show spinner with live wall-clock timer that ticks even during prefill
+        var wallClock = System.Diagnostics.Stopwatch.StartNew();
+        _spinnerBase = "Thinking...";
+        _output?.UpdateStatus(sb => sb.StartSpinner(_spinnerBase, () =>
+        {
+            var elapsed = wallClock.Elapsed;
+            var timeStr = elapsed.TotalSeconds < 60
+                ? $"{elapsed.TotalSeconds:F0}s"
+                : $"{(int)elapsed.TotalMinutes}m {elapsed.Seconds:D2}s";
+            sb.SetSpinnerMessage($"{_spinnerBase}  <{timeStr}>");
+            _output?.TickSpinner();
+        }));
 
         // Debug: log the rendered prompt for this request
         InferenceLog.BeginRequest(input, _conversation?.RenderPrompt() ?? "");
@@ -444,15 +454,14 @@ public sealed class MinionEngine : IDisposable
             tokenCount++;
             InferenceLog.AppendToken(token);
 
-            // Live token count + tok/s — update during ALL phases including thinking
+            // Live stats — update the base message so the wall-clock tick picks it up
             if (tokenCount % 5 == 0)
             {
                 var count = tokenCount;
                 var elapsed = sw.Elapsed.TotalSeconds;
                 var tokPerSec = elapsed > 0.1 ? count / elapsed : 0;
-                var phase = thinkStripped ? "" : "thinking  ";
-                _output?.UpdateSpinnerMessage(s =>
-                    s.SetSpinnerMessage($"{phase}{count} tok  {tokPerSec:F1} tok/s"));
+                var phase = thinkStripped ? "Generating" : "Thinking";
+                _spinnerBase = $"{phase}  {count} tok  {tokPerSec:F1} tok/s";
             }
 
             // Phase 1: Buffer prefix to detect and strip <think>...</think>
