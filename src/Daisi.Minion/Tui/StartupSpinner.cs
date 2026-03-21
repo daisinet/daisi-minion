@@ -1,3 +1,6 @@
+using System.Runtime.InteropServices;
+using System.Text;
+
 namespace Daisi.Minion.Tui;
 
 /// <summary>
@@ -12,6 +15,7 @@ public sealed class StartupSpinner : IDisposable
     private const string Green = "\x1b[32m";
     private const string Reset = "\x1b[0m";
 
+    private static bool _consoleReady;
     private readonly Timer _timer;
     private int _frame;
     private string _message = "";
@@ -19,6 +23,7 @@ public sealed class StartupSpinner : IDisposable
 
     public StartupSpinner(string message)
     {
+        EnsureConsoleReady();
         _message = message;
         Render();
         _timer = new Timer(_ =>
@@ -61,4 +66,32 @@ public sealed class StartupSpinner : IDisposable
         _disposed = true;
         _timer.Dispose();
     }
+
+    /// <summary>
+    /// One-time setup: UTF-8 encoding + Windows VT100 mode.
+    /// Must run before any Unicode or ANSI output.
+    /// </summary>
+    private static void EnsureConsoleReady()
+    {
+        if (_consoleReady) return;
+        _consoleReady = true;
+
+        Console.OutputEncoding = Encoding.UTF8;
+
+        if (OperatingSystem.IsWindows())
+        {
+            var handle = GetStdHandle(-11); // STD_OUTPUT_HANDLE
+            if (GetConsoleMode(handle, out var mode))
+                SetConsoleMode(handle, mode | 0x0004); // ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern nint GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetConsoleMode(nint handle, out uint mode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetConsoleMode(nint handle, uint mode);
 }
