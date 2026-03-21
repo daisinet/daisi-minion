@@ -1,5 +1,5 @@
 using Daisi.Minion.Tui;
-using Daisi.Llama.Chat;
+using Daisi.Llogos.Chat;
 
 namespace Daisi.Minion.Host;
 
@@ -11,15 +11,15 @@ namespace Daisi.Minion.Host;
 public sealed class HostModeService : IAsyncDisposable
 {
     private readonly AnsiRenderer _renderer;
-    private readonly DaisiLlamaTextBackend _backend;
-    private DaisiLlamaModelHandle? _modelHandle;
+    private readonly DaisiLlogosTextBackend _backend;
+    private DaisiLlogosModelHandle? _modelHandle;
     private Timer? _heartbeatTimer;
     private bool _isActive;
     private CancellationTokenSource? _hostCts;
 
     public bool IsActive => _isActive;
 
-    public HostModeService(AnsiRenderer renderer, DaisiLlamaTextBackend backend)
+    public HostModeService(AnsiRenderer renderer, DaisiLlogosTextBackend backend)
     {
         _renderer = renderer;
         _backend = backend;
@@ -28,7 +28,7 @@ public sealed class HostModeService : IAsyncDisposable
     /// <summary>
     /// Enter host mode: make the model available for ORC inference requests.
     /// </summary>
-    public async Task EnterHostModeAsync(DaisiLlamaModelHandle modelHandle, CancellationToken ct)
+    public async Task EnterHostModeAsync(DaisiLlogosModelHandle modelHandle, CancellationToken ct)
     {
         if (_isActive) return;
 

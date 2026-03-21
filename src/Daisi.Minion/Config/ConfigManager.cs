@@ -31,13 +31,6 @@ public sealed class ConfigManager
         else
         {
             Config = new MinionConfig();
-            // Try to find a default model
-            if (Directory.Exists(Config.ModelsDirectory))
-            {
-                var gguf = Directory.EnumerateFiles(Config.ModelsDirectory, "*.gguf").FirstOrDefault();
-                if (gguf != null)
-                    Config.ActiveModel = gguf;
-            }
         }
     }
 

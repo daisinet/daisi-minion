@@ -6,6 +6,7 @@ namespace Daisi.Minion.Commands.Handlers;
 
 /// <summary>
 /// Handles the /model command:
+/// Also fetches and saves per-model inference profiles from HuggingFace.
 /// - /model — list local models and active model
 /// - /model &lt;huggingface-url&gt; — look up and download a model
 /// </summary>
@@ -13,11 +14,13 @@ public sealed class ModelCommandHandler : ISlashCommandHandler
 {
     private readonly AnsiRenderer _renderer;
     private readonly ConfigManager _configManager;
+    private readonly Action _onModelChanged;
 
-    public ModelCommandHandler(AnsiRenderer renderer, ConfigManager configManager)
+    public ModelCommandHandler(AnsiRenderer renderer, ConfigManager configManager, Action onModelChanged)
     {
         _renderer = renderer;
         _configManager = configManager;
+        _onModelChanged = onModelChanged;
     }
 
     public async Task HandleAsync(string args, CancellationToken ct)
@@ -34,34 +37,59 @@ public sealed class ModelCommandHandler : ISlashCommandHandler
     private void ListModels()
     {
         var config = _configManager.Config;
-        _renderer.WriteInfo("Models directory: " + config.ModelsDirectory);
-        Console.WriteLine();
+        _renderer.WriteInfoHeader("Models directory: " + config.ModelsDirectory);
+        _renderer.WriteInfo("");
 
-        // List GGUF files in the directory
         if (!Directory.Exists(config.ModelsDirectory))
         {
             _renderer.WriteError($"Models directory not found: {config.ModelsDirectory}");
             return;
         }
 
-        var files = Directory.GetFiles(config.ModelsDirectory, "*.gguf");
-        if (files.Length == 0)
+        var files = FindGgufFiles(config.ModelsDirectory);
+        if (files.Count == 0)
         {
             _renderer.WriteInfo("No models found. Use /model <huggingface-url> to download one.");
             return;
         }
 
-        foreach (var file in files)
+        var activePath = config.ActiveModel;
+        for (int i = 0; i < files.Count; i++)
         {
-            var name = Path.GetFileName(file);
-            var size = new FileInfo(file).Length;
-            var sizeMB = size / (1024.0 * 1024.0);
-            var active = file == config.ActiveModel ? " \x1b[32m(active)\x1b[0m" : "";
-            Console.WriteLine($"  {name} ({sizeMB:F0} MB){active}");
+            var file = files[i];
+            var sizeMB = new FileInfo(file).Length / (1024.0 * 1024.0);
+            var sizeGB = sizeMB / 1024.0;
+            var sizeStr = sizeGB >= 1.0 ? $"{sizeGB:F1} GB" : $"{sizeMB:F0} MB";
+
+            // Show path relative to models directory for subfolder models
+            var relPath = Path.GetRelativePath(config.ModelsDirectory, file);
+            var isActive = !string.IsNullOrEmpty(activePath)
+                && string.Equals(Path.GetFullPath(file), Path.GetFullPath(activePath), StringComparison.OrdinalIgnoreCase);
+            var active = isActive ? " \x1b[32m(active)\x1b[0m" : "";
+
+            _renderer.WriteInfo($"  \x1b[0m\x1b[36m{i + 1}\x1b[0m) {relPath} \x1b[90m({sizeStr})\x1b[0m{active}");
         }
 
-        Console.WriteLine();
+        _renderer.WriteInfo("");
         _renderer.WriteInfo("Use /model <number> to switch, or /model <huggingface-url> to download.");
+    }
+
+    /// <summary>
+    /// Find all .gguf files in the models directory and its first-level subfolders.
+    /// </summary>
+    private static List<string> FindGgufFiles(string modelsDir)
+    {
+        var files = new List<string>();
+
+        // Top-level files
+        files.AddRange(Directory.EnumerateFiles(modelsDir, "*.gguf"));
+
+        // First-level subfolder files
+        foreach (var subDir in Directory.EnumerateDirectories(modelsDir))
+            files.AddRange(Directory.EnumerateFiles(subDir, "*.gguf"));
+
+        files.Sort(StringComparer.OrdinalIgnoreCase);
+        return files;
     }
 
     private async Task DownloadModel(string input, CancellationToken ct)
@@ -80,7 +108,7 @@ public sealed class ModelCommandHandler : ISlashCommandHandler
             return;
         }
 
-        _renderer.WriteInfo($"Looking up {repoId}...");
+        _renderer.WriteInfoHeader($"Looking up {repoId}...");
 
         var hf = new HuggingFaceClient(_renderer);
         var files = await hf.ListGgufFilesAsync(repoId, ct);
@@ -92,12 +120,12 @@ public sealed class ModelCommandHandler : ISlashCommandHandler
         }
 
         // Show options
-        Console.WriteLine();
-        _renderer.WriteInfo("Available quantizations:");
+        _renderer.WriteInfo("");
+        _renderer.WriteInfoHeader("Available quantizations:");
         for (int i = 0; i < files.Count; i++)
-            Console.WriteLine($"  [{i + 1}] {files[i].FileName} ({files[i].SizeDisplay})");
+            _renderer.WriteInfo($"  [{i + 1}] {files[i].FileName} ({files[i].SizeDisplay})");
 
-        Console.WriteLine();
+        _renderer.WriteInfo("");
         Console.Write("Select a file (number): ");
         var line = Console.ReadLine();
         if (!int.TryParse(line, out var selection) || selection < 1 || selection > files.Count)
@@ -113,7 +141,21 @@ public sealed class ModelCommandHandler : ISlashCommandHandler
         var path = await downloader.DownloadAsync(selected.DownloadUrl, selected.FileName, ct);
 
         if (path != null)
-            _renderer.WriteSuccess($"Model saved to {path}. Restart daisi-minion to use it.");
+        {
+            // Fetch and save recommended generation settings
+            // The GGUF repo is often a quantized fork — try the base model repo too
+            _renderer.WriteInfo("Fetching model settings from HuggingFace...");
+            var profile = await hf.FetchGenerationConfigAsync(repoId, ct);
+            if (profile != null)
+            {
+                profile.ModelId = Path.GetFileNameWithoutExtension(selected.FileName);
+                profile.Save(path);
+                _renderer.WriteSuccess($"Saved model profile (temp={profile.Temperature}, top_k={profile.TopK}, top_p={profile.TopP}, ctx={profile.ContextSize})");
+            }
+
+            _renderer.WriteSuccess($"Model saved to {path}. Loading...");
+            _onModelChanged();
+        }
     }
 
     private void SwitchModel(int index)
@@ -121,8 +163,8 @@ public sealed class ModelCommandHandler : ISlashCommandHandler
         var dir = _configManager.Config.ModelsDirectory;
         if (!Directory.Exists(dir)) return;
 
-        var files = Directory.GetFiles(dir, "*.gguf");
-        if (index < 1 || index > files.Length)
+        var files = FindGgufFiles(dir);
+        if (index < 1 || index > files.Count)
         {
             _renderer.WriteError("Invalid model number.");
             return;
@@ -130,6 +172,7 @@ public sealed class ModelCommandHandler : ISlashCommandHandler
 
         _configManager.Config.ActiveModel = files[index - 1];
         _configManager.Save();
-        _renderer.WriteSuccess($"Active model set to {Path.GetFileName(files[index - 1])}. Restart daisi-minion to use it.");
+        _renderer.WriteSuccess($"Switching to {Path.GetFileName(files[index - 1])}...");
+        _onModelChanged();
     }
 }
