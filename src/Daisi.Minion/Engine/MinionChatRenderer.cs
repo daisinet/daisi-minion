@@ -109,7 +109,12 @@ public sealed class MinionChatRenderer : IChatRenderer
         {
             // If the last message was already an assistant message being continued, don't add another
             if (messages.Count == 0 || messages[^1].Role != "assistant")
-                sb.Append("<|im_start|>assistant\n");
+            {
+                // Qwen 3.5 non-thinking format: empty think block signals
+                // "thinking is done, respond directly." Without this, the model
+                // opens <think> and never closes it.
+                sb.Append("<|im_start|>assistant\n<think>\n\n</think>\n\n");
+            }
         }
 
         return sb.ToString();
