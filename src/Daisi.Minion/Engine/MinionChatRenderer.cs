@@ -42,8 +42,8 @@ public sealed class MinionChatRenderer : IChatRenderer
                 sb.Append(messages[0].Content).Append("\n\n");
 
             // Tools block
-            sb.Append("# Tools\n\nYou may call one or more functions to assist with the user query.\n\n");
-            sb.Append("You are provided with function signatures within <tools></tools> XML tags:\n<tools>");
+            sb.Append("# Tools\n\nYou have access to the following tools. Use them to take action — do not just describe what you would do.\n\n");
+            sb.Append("<tools>");
             foreach (var tool in _tools)
             {
                 sb.Append('\n');
@@ -60,8 +60,9 @@ public sealed class MinionChatRenderer : IChatRenderer
                 sb.Append(JsonSerializer.Serialize(toolObj, JsonOpts));
             }
             sb.Append("\n</tools>\n\n");
-            sb.Append("For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n");
-            sb.Append("<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>");
+            sb.Append("When you need to take action, call a tool using this exact format:\n");
+            sb.Append("<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n");
+            sb.Append("IMPORTANT: When asked to create, edit, or build something, use your tools immediately. Do not describe what you plan to do — just do it.");
             sb.Append("<|im_end|>\n");
         }
         else
