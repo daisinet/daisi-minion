@@ -43,12 +43,22 @@ public sealed class ConsoleOutput
         }
     }
 
-    /// <summary>Thread-safe spinner tick — redraws the full status bar to keep indicators current.</summary>
+    /// <summary>Thread-safe lightweight spinner message update (left side only, no flicker).</summary>
+    public void UpdateSpinnerMessage(Action<StatusBar> mutate)
+    {
+        lock (_writeLock)
+        {
+            mutate(_layout.StatusBar);
+            _layout.UpdateSpinnerMessage();
+        }
+    }
+
+    /// <summary>Thread-safe spinner tick — updates spinner area only, no full redraw.</summary>
     public void TickSpinner()
     {
         lock (_writeLock)
         {
-            _layout.UpdateStatusBar();
+            _layout.UpdateSpinnerMessage();
         }
     }
 

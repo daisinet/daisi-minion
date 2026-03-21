@@ -142,6 +142,32 @@ public sealed class LayoutManager : IDisposable
         Flush(buf);
     }
 
+    /// <summary>
+    /// Rewrite the spinner area (char + message) on the status bar without
+    /// touching the right side indicators. Avoids full-line clear flicker.
+    /// </summary>
+    public void UpdateSpinnerMessage()
+    {
+        if (!StatusBar.IsSpinning) return;
+
+        var ch = StatusBar.CurrentSpinnerChar ?? " ";
+        var msg = StatusBar.CurrentSpinnerMessage ?? "";
+
+        // Calculate max width for the left side (leave room for right indicators)
+        var maxLeft = _termWidth / 2;
+        if (msg.Length + 4 > maxLeft)
+            msg = msg[..(maxLeft - 4)];
+
+        var buf = new StringBuilder();
+        buf.Append(HideCursor);
+        // Move to start of status bar, write spinner + message, pad with spaces to clear old text
+        buf.Append($"{Esc}{StatusBarRow};1H");
+        var content = $" {ch} {msg}";
+        buf.Append($"{BlackBg}{DimWhite}{content}{new string(' ', Math.Max(0, maxLeft - content.Length))}{Reset}");
+        AppendCursorRestore(buf);
+        Flush(buf);
+    }
+
     /// <summary>Redraw the command bar.</summary>
     public void RedrawCommandBar(string text, int cursorPos)
     {

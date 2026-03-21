@@ -31,6 +31,8 @@ public sealed class StatusBar
     public const int SpinnerCol = 2;
     public bool IsSpinning => _spinnerActive;
 
+    public string? CurrentSpinnerMessage => _spinnerActive ? _spinnerMessage : null;
+
     public string? CurrentSpinnerChar => _spinnerActive
         ? SpinnerFrames[_spinnerFrame]
         : null;
@@ -50,6 +52,9 @@ public sealed class StatusBar
             _onSpinnerTick?.Invoke();
         }, null, 120, 120);
     }
+
+    /// <summary>Update just the spinner message text without restarting the timer.</summary>
+    public void SetSpinnerMessage(string message) => _spinnerMessage = message;
 
     public void StopSpinner()
     {

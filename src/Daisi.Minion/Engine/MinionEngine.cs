@@ -488,14 +488,12 @@ public sealed class MinionEngine : IDisposable
                 lineBuffer.Append(token);
             }
 
-            if (tokenCount % 10 == 0)
+            // Live token count — lightweight left-side-only update, no flicker
+            if (tokenCount % 5 == 0)
             {
                 var count = tokenCount;
-                _output?.UpdateStatus(s =>
-                {
-                    s.SetIndicator("gen", $"{count} tok");
-                    s.SetContextUsage(_conversation?.ContextUsed ?? 0, _activeContextSize);
-                });
+                _output?.UpdateSpinnerMessage(s =>
+                    s.SetSpinnerMessage($"Generating... {count} tok"));
             }
 
             // Emit complete lines
