@@ -8,6 +8,7 @@ public sealed class ClearCommandHandler(ConversationManager conversation, AnsiRe
     public Task HandleAsync(string args, CancellationToken ct)
     {
         conversation.Reset();
+        InferenceLog.Reset("/clear");
         renderer.WriteSuccess("Conversation cleared.");
         return Task.CompletedTask;
     }

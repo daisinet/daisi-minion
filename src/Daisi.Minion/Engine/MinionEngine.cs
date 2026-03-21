@@ -61,6 +61,7 @@ public sealed class MinionEngine : IDisposable
     public async Task RunAsync()
     {
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; _cts.Cancel(); };
+        InferenceLog.Reset("startup");
 
         _renderer.WriteBanner(_configManager.Config.MinionName);
 
@@ -745,6 +746,7 @@ public sealed class MinionEngine : IDisposable
             try
             {
                 await _conversation.CompactAsync(GetGenerationParams(), _cts.Token);
+                InferenceLog.Reset("auto-compact");
                 var newUsed = _conversation.ContextUsed;
                 _output?.UpdateStatus(sb =>
                     sb.SetContextUsage(newUsed, _activeContextSize));
@@ -1033,6 +1035,7 @@ public sealed class MinionEngine : IDisposable
         try
         {
             // Dispose in dependency order: conversation → dual-mode → model
+            InferenceLog.Reset("model reload");
             _conversation?.Dispose();
             _conversation = null;
 
