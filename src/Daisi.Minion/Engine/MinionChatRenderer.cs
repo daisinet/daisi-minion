@@ -26,7 +26,7 @@ public sealed class MinionChatRenderer : IChatRenderer
         _tools = tools;
     }
 
-    public string[] GetStopSequences() => ["<|im_end|>", "</tool_call>", "</think>", "</thinking>"];
+    public string[] GetStopSequences() => ["<|im_end|>", "</tool_call>"];
 
     public string Render(IReadOnlyList<ChatMessage> messages, bool addGenerationPrompt = true)
     {
@@ -108,10 +108,9 @@ public sealed class MinionChatRenderer : IChatRenderer
             // If the last message was already an assistant message being continued, don't add another
             if (messages.Count == 0 || messages[^1].Role != "assistant")
             {
-                // Qwen 3.5 non-thinking format: empty think block signals
-                // "thinking is done, respond directly." Without this, the model
-                // opens <think> and never closes it.
-                sb.Append("<|im_start|>assistant\n<think>\n\n</think>\n\n");
+                // Enable thinking so the model can reason before tool calls.
+                // The StreamByLine think-stripper hides <think>...</think> from display.
+                sb.Append("<|im_start|>assistant\n<think>\n");
             }
         }
 
