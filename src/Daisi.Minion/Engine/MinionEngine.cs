@@ -422,11 +422,53 @@ public sealed class MinionEngine : IDisposable
         var lineWriter = _renderer.CreateLineWriter();
         var firstLine = true;
 
+        // Qwen 3.5 may produce <think>...</think> at the start of the response.
+        // Buffer everything until we know whether thinking is present, then strip it.
+        var prefixBuffer = new StringBuilder();
+        var thinkStripped = false; // true once we've resolved the think prefix
+
         await foreach (var token in tokens.WithCancellation(ct))
         {
             fullResponse.Append(token);
-            lineBuffer.Append(token);
             tokenCount++;
+
+            // Phase 1: Buffer prefix to detect and strip <think>...</think>
+            if (!thinkStripped)
+            {
+                prefixBuffer.Append(token);
+                var buf = prefixBuffer.ToString();
+
+                // Check if we have a think block that's been closed
+                if (buf.Contains("</think>"))
+                {
+                    var endIdx = buf.IndexOf("</think>", StringComparison.Ordinal);
+                    var afterThink = buf[(endIdx + 8)..].TrimStart('\r', '\n');
+                    thinkStripped = true;
+                    prefixBuffer.Clear();
+                    if (afterThink.Length > 0)
+                        lineBuffer.Append(afterThink);
+                    continue;
+                }
+
+                // If the buffer doesn't start with <think and we have enough to tell,
+                // flush it as regular content
+                var trimmed = buf.TrimStart();
+                if (trimmed.Length > 7 && !trimmed.StartsWith("<think"))
+                {
+                    thinkStripped = true;
+                    lineBuffer.Append(buf);
+                    prefixBuffer.Clear();
+                    // fall through to line emission below
+                }
+                else
+                {
+                    continue; // still accumulating prefix
+                }
+            }
+            else
+            {
+                lineBuffer.Append(token);
+            }
 
             if (tokenCount % 10 == 0)
             {

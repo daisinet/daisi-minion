@@ -61,15 +61,14 @@ public sealed class MinionChatRenderer : IChatRenderer
             }
             sb.Append("\n</tools>\n\n");
             sb.Append("For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n");
-            sb.Append("<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n");
-            sb.Append("/no_think");
+            sb.Append("<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>");
             sb.Append("<|im_end|>\n");
         }
         else
         {
             // No tools — render system message normally if present
             if (messages.Count > 0 && messages[0].Role == "system")
-                sb.Append("<|im_start|>system\n").Append(messages[0].Content).Append("\n/no_think").Append("<|im_end|>\n");
+                sb.Append("<|im_start|>system\n").Append(messages[0].Content).Append("<|im_end|>\n");
         }
 
         // --- Conversation messages ---
