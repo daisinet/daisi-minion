@@ -44,11 +44,8 @@ public sealed class ProjectContext
             sb.AppendLine("- Git status:");
             sb.AppendLine(GitStatus);
         }
-        if (!string.IsNullOrEmpty(FileTree))
-        {
-            sb.AppendLine("- File tree (depth-limited):");
-            sb.AppendLine(FileTree);
-        }
+        // File tree omitted from system prompt to save tokens.
+        // The model can use glob and file_read to explore as needed.
 
         return sb.ToString();
     }
