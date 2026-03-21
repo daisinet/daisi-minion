@@ -450,15 +450,27 @@ public sealed class MinionEngine : IDisposable
                     continue;
                 }
 
-                // If the buffer doesn't start with <think and we have enough to tell,
-                // flush it as regular content
                 var trimmed = buf.TrimStart();
+
+                // Not a think block — flush as regular content
                 if (trimmed.Length > 7 && !trimmed.StartsWith("<think"))
                 {
                     thinkStripped = true;
                     lineBuffer.Append(buf);
                     prefixBuffer.Clear();
                     // fall through to line emission below
+                }
+                // Model opened <think> but never closed it — after enough content,
+                // strip the tag and display the rest (model forgot </think>)
+                else if (trimmed.StartsWith("<think") && trimmed.Length > 100)
+                {
+                    thinkStripped = true;
+                    var thinkIdx = trimmed.IndexOf("<think>", StringComparison.Ordinal);
+                    var afterTag = trimmed[(thinkIdx + 7)..].TrimStart('\r', '\n');
+                    prefixBuffer.Clear();
+                    if (afterTag.Length > 0)
+                        lineBuffer.Append(afterTag);
+                    // fall through to line emission
                 }
                 else
                 {
