@@ -57,7 +57,9 @@ public sealed class MinionChatRenderer : IChatRenderer
             sb.Append("\n</tools>\n\n");
             sb.Append("If you choose to call a function ONLY reply in the following format with NO suffix:\n\n");
             sb.Append("<tool_call>\n<function=example_function_name>\n<parameter=example_parameter>\nvalue\n</parameter>\n</function>\n</tool_call>\n\n");
-            sb.Append("<IMPORTANT>\nWhen asked to create, edit, or build something, use your tools immediately. Do not describe what you plan to do — just do it.\n</IMPORTANT>");
+            sb.Append("Example — to write a file, respond with ONLY:\n\n");
+            sb.Append("<tool_call>\n<function=file_write>\n<parameter=path>\nhello.txt\n</parameter>\n<parameter=content>\nHello World\n</parameter>\n</function>\n</tool_call>\n\n");
+            sb.Append("<IMPORTANT>\nWhen asked to create, edit, or build something, respond with a tool call. Do not describe what you plan to do — call the tool.\n</IMPORTANT>");
             if (systemContent != null)
                 sb.Append("\n\n").Append(systemContent);
             sb.Append("<|im_end|>\n");
@@ -108,9 +110,9 @@ public sealed class MinionChatRenderer : IChatRenderer
             // If the last message was already an assistant message being continued, don't add another
             if (messages.Count == 0 || messages[^1].Role != "assistant")
             {
-                // Enable thinking so the model can reason before tool calls.
-                // The StreamByLine think-stripper hides <think>...</think> from display.
-                sb.Append("<|im_start|>assistant\n<think>\n");
+                // Non-thinking format for Qwen 3.5 small models (0.8B-9B) where
+                // reasoning is off by default. Empty think block = respond directly.
+                sb.Append("<|im_start|>assistant\n<think>\n\n</think>\n\n");
             }
         }
 
