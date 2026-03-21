@@ -548,7 +548,8 @@ public sealed class MinionEngine : IDisposable
         try
         {
             var backend = new DaisiLlogosTextBackend();
-            backend.OnLog = msg => loadSpinner.Update(msg);
+            string? backendName = null;
+            backend.OnLog = msg => { backendName = msg; loadSpinner.Update(msg); };
             await backend.ConfigureAsync(new Daisi.Inference.Models.BackendConfiguration
             {
                 Runtime = _configManager.Config.Backend,
@@ -563,7 +564,9 @@ public sealed class MinionEngine : IDisposable
             }
             var contextSize = profile?.ContextSize ?? _configManager.Config.ContextSize;
 
-            loadSpinner.Update($"Loading weights ({modelFileName})...");
+            var fileSizeMb = new FileInfo(modelPath).Length / (1024.0 * 1024);
+            var sizeStr = fileSizeMb >= 1024 ? $"{fileSizeMb / 1024:F1} GB" : $"{fileSizeMb:F0} MB";
+            loadSpinner.Update($"Loading {sizeStr} → {backendName ?? "GPU"}...");
             var handleAdapter = await backend.LoadModelAsync(new Daisi.Inference.Models.ModelLoadRequest
             {
                 ModelId = Path.GetFileNameWithoutExtension(modelPath),
