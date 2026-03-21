@@ -43,6 +43,10 @@ public sealed class MinionConfig
     [JsonPropertyName("minion_name")]
     public string MinionName { get; set; } = "minion";
 
+    /// <summary>Override working directory. If set, the minion cd's here on startup.</summary>
+    [JsonPropertyName("working_directory")]
+    public string? WorkingDirectory { get; set; }
+
     [JsonPropertyName("models")]
     public List<ModelEntry> Models { get; set; } = [];
 }

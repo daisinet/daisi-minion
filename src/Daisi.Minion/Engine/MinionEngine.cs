@@ -44,7 +44,11 @@ public sealed class MinionEngine : IDisposable
     public MinionEngine(ConfigManager configManager)
     {
         _configManager = configManager;
-        _projectContext = new ProjectContext(Directory.GetCurrentDirectory());
+        var workDir = _configManager.Config.WorkingDirectory;
+        if (string.IsNullOrEmpty(workDir) || !Directory.Exists(workDir))
+            workDir = Directory.GetCurrentDirectory();
+        Directory.SetCurrentDirectory(workDir);
+        _projectContext = new ProjectContext(workDir);
 
         // Register tools
         _toolRegistry.Register(new FileReadTool());
