@@ -31,36 +31,48 @@ public static partial class QwenToolCallParser
     {
         var results = new List<ToolCall>();
 
-        foreach (Match block in ToolCallBlockRegex().Matches(text))
+        // Try regex with closing tag first
+        var blocks = ToolCallBlockRegex().Matches(text);
+        if (blocks.Count == 0)
+        {
+            // Stop sequence may have consumed </tool_call> — try without it
+            var openIdx = text.IndexOf("<tool_call>", StringComparison.Ordinal);
+            if (openIdx >= 0)
+            {
+                var inner = text[(openIdx + 11)..].Trim();
+                var call = TryParseXml(inner) ?? TryParseJson(inner);
+                if (call != null) results.Add(call);
+                return results;
+            }
+        }
+
+        foreach (Match block in blocks)
         {
             var inner = block.Groups[1].Value.Trim();
-
-            // Try XML format first: <function=name>...<parameter=key>value</parameter>...</function>
-            var funcMatch = FunctionRegex().Match(inner);
-            if (funcMatch.Success)
-            {
-                var name = funcMatch.Groups[1].Value;
-                var body = funcMatch.Groups[2].Value;
-                var args = new JsonObject();
-
-                foreach (Match param in ParameterRegex().Matches(body))
-                {
-                    var paramName = param.Groups[1].Value;
-                    var paramValue = param.Groups[2].Value.Trim();
-                    args[paramName] = paramValue;
-                }
-
-                results.Add(new ToolCall(name, args));
-                continue;
-            }
-
-            // Fall back to JSON format: {"name": "...", "arguments": {...}}
-            var jsonCall = TryParseJson(inner);
-            if (jsonCall != null)
-                results.Add(jsonCall);
+            var call = TryParseXml(inner) ?? TryParseJson(inner);
+            if (call != null) results.Add(call);
         }
 
         return results;
+    }
+
+    private static ToolCall? TryParseXml(string inner)
+    {
+        var funcMatch = FunctionRegex().Match(inner);
+        if (!funcMatch.Success) return null;
+
+        var name = funcMatch.Groups[1].Value;
+        var body = funcMatch.Groups[2].Value;
+        var args = new JsonObject();
+
+        foreach (Match param in ParameterRegex().Matches(body))
+        {
+            var paramName = param.Groups[1].Value;
+            var paramValue = param.Groups[2].Value.Trim();
+            args[paramName] = paramValue;
+        }
+
+        return new ToolCall(name, args);
     }
 
     public static string GetTextBeforeToolCalls(string text)

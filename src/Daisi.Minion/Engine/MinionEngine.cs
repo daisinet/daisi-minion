@@ -519,20 +519,31 @@ public sealed class MinionEngine : IDisposable
                 lineBuffer.Append(token);
             }
 
-            // Suppress display once tool call XML starts
-            if (!toolCallStarted && lineBuffer.ToString().Contains("<tool_call>"))
+            // Suppress display once tool call XML starts — check both lineBuffer
+            // and fullResponse since the tag might arrive via think-strip flush
+            if (!toolCallStarted)
             {
-                // Emit anything before the tag, then suppress the rest
-                var buf = lineBuffer.ToString();
-                var tagIdx = buf.IndexOf("<tool_call>", StringComparison.Ordinal);
-                var before = buf[..tagIdx].Trim();
-                if (before.Length > 0 && !string.IsNullOrWhiteSpace(before))
+                var checkBuf = lineBuffer.Length > 0 ? lineBuffer.ToString() : null;
+                if ((checkBuf != null && checkBuf.Contains("<tool_call>")) ||
+                    fullResponse.ToString().Contains("<tool_call>"))
                 {
-                    if (firstLine) { _renderer.WriteLine(); firstLine = false; }
-                    lineWriter.WriteLine(CleanLine(before));
+                    // Emit anything before the tag, then suppress the rest
+                    if (checkBuf != null)
+                    {
+                        var tagIdx = checkBuf.IndexOf("<tool_call>", StringComparison.Ordinal);
+                        if (tagIdx > 0)
+                        {
+                            var before = CleanLine(checkBuf[..tagIdx].Trim());
+                            if (before.Length > 0)
+                            {
+                                if (firstLine) { _renderer.WriteLine(); firstLine = false; }
+                                lineWriter.WriteLine(before);
+                            }
+                        }
+                    }
+                    lineBuffer.Clear();
+                    toolCallStarted = true;
                 }
-                lineBuffer.Clear();
-                toolCallStarted = true;
             }
 
             if (toolCallStarted)
