@@ -897,38 +897,39 @@ public sealed class MinionEngine : IDisposable
 
     private void ReloadModel()
     {
-        Task.Run(async () =>
+        // Run synchronously on the calling thread to keep the CUDA context
+        // on the same thread that will later run inference. Task.Run would
+        // create the context on a threadpool thread, causing ErrorInvalidContext
+        // when the main thread tries to use it.
+        try
         {
-            try
+            // Dispose in dependency order: conversation → dual-mode → model
+            _conversation?.Dispose();
+            _conversation = null;
+
+            if (_dualMode != null)
             {
-                // Dispose in dependency order: conversation → dual-mode → model
-                _conversation?.Dispose();
-                _conversation = null;
-
-                if (_dualMode != null)
-                {
-                    await _dualMode.DisposeAsync();
-                    _dualMode = null;
-                }
-
-                _modelHandle?.Dispose();
-                _modelHandle = null;
-
-                // Allow GPU resources to fully release before creating new context
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-
-                await TryLoadModelAsync();
-                InitializeConversation();
-                InitializeDualMode();
-                SetInitialIndicators();
-                _renderer.WriteSuccess("Model reloaded.");
+                _dualMode.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                _dualMode = null;
             }
-            catch (Exception ex)
-            {
-                _renderer.WriteError($"Reload failed: {ex.Message}");
-            }
-        });
+
+            _modelHandle?.Dispose();
+            _modelHandle = null;
+
+            // Allow GPU resources to fully release before creating new context
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+
+            TryLoadModelAsync().GetAwaiter().GetResult();
+            InitializeConversation();
+            InitializeDualMode();
+            SetInitialIndicators();
+            _renderer.WriteSuccess("Model reloaded.");
+        }
+        catch (Exception ex)
+        {
+            _renderer.WriteError($"Reload failed: {ex.Message}");
+        }
     }
 
     private GenerationParams GetGenerationParams()
