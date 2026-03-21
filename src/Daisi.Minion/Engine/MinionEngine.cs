@@ -451,6 +451,7 @@ public sealed class MinionEngine : IDisposable
         // Buffer everything until we know whether thinking is present, then strip it.
         var prefixBuffer = new StringBuilder();
         var thinkStripped = false; // true once we've resolved the think prefix
+        var toolCallStarted = false; // suppress display once <tool_call> appears
 
         await foreach (var token in tokens.WithCancellation(ct))
         {
@@ -517,6 +518,25 @@ public sealed class MinionEngine : IDisposable
             {
                 lineBuffer.Append(token);
             }
+
+            // Suppress display once tool call XML starts
+            if (!toolCallStarted && lineBuffer.ToString().Contains("<tool_call>"))
+            {
+                // Emit anything before the tag, then suppress the rest
+                var buf = lineBuffer.ToString();
+                var tagIdx = buf.IndexOf("<tool_call>", StringComparison.Ordinal);
+                var before = buf[..tagIdx].Trim();
+                if (before.Length > 0 && !string.IsNullOrWhiteSpace(before))
+                {
+                    if (firstLine) { _renderer.WriteLine(); firstLine = false; }
+                    lineWriter.WriteLine(CleanLine(before));
+                }
+                lineBuffer.Clear();
+                toolCallStarted = true;
+            }
+
+            if (toolCallStarted)
+                continue;
 
             // Emit complete lines
             while (lineBuffer.ToString().Contains('\n'))
