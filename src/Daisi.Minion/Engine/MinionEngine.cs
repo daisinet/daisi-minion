@@ -181,6 +181,9 @@ public sealed class MinionEngine : IDisposable
         _output?.UpdateStatus(sb => sb.StartSpinner("Thinking...", () =>
             _output?.TickSpinner()));
 
+        // Debug: log the rendered prompt for this request
+        InferenceLog.BeginRequest(input, _conversation?.RenderPrompt() ?? "");
+
         try
         {
             var fullResponse = await StreamByLine(
@@ -425,6 +428,7 @@ public sealed class MinionEngine : IDisposable
         var fullResponse = new StringBuilder();
         var lineBuffer = new StringBuilder();
         var tokenCount = 0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var lineWriter = _renderer.CreateLineWriter();
         var firstLine = true;
 
@@ -437,6 +441,7 @@ public sealed class MinionEngine : IDisposable
         {
             fullResponse.Append(token);
             tokenCount++;
+            InferenceLog.AppendToken(token);
 
             // Phase 1: Buffer prefix to detect and strip <think>...</think>
             if (!thinkStripped)
@@ -488,12 +493,14 @@ public sealed class MinionEngine : IDisposable
                 lineBuffer.Append(token);
             }
 
-            // Live token count — lightweight left-side-only update, no flicker
+            // Live token count + tok/s — lightweight left-side-only update
             if (tokenCount % 5 == 0)
             {
                 var count = tokenCount;
+                var elapsed = sw.Elapsed.TotalSeconds;
+                var tokPerSec = elapsed > 0.1 ? count / elapsed : 0;
                 _output?.UpdateSpinnerMessage(s =>
-                    s.SetSpinnerMessage($"Generating... {count} tok"));
+                    s.SetSpinnerMessage($"{count} tok  {tokPerSec:F1} tok/s"));
             }
 
             // Emit complete lines
@@ -526,7 +533,10 @@ public sealed class MinionEngine : IDisposable
         lineWriter.Finish();
         _renderer.WriteLine();
 
-        _output?.UpdateStatus(s => s.SetIndicator("gen", $"{tokenCount} tok"));
+        sw.Stop();
+        var finalTokPerSec = sw.Elapsed.TotalSeconds > 0 ? tokenCount / sw.Elapsed.TotalSeconds : 0;
+        _output?.UpdateStatus(s => s.SetIndicator("gen", $"{tokenCount} tok  {finalTokPerSec:F1} t/s  {sw.Elapsed.TotalSeconds:F1}s"));
+        InferenceLog.EndRequest(tokenCount, $"stop_sequence | {finalTokPerSec:F1} tok/s | {sw.Elapsed.TotalSeconds:F1}s");
         return fullResponse.ToString();
     }
 
