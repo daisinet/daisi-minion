@@ -29,6 +29,18 @@ public static class InferenceLog
         catch { }
     }
 
+    /// <summary>Log a general message with timestamp.</summary>
+    [Conditional("DEBUG")]
+    public static void Log(string message)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+            File.AppendAllText(LogPath, $"[{DateTime.Now:HH:mm:ss.fff}] {message}\n");
+        }
+        catch { }
+    }
+
     /// <summary>Log the start of an inference request with the full rendered prompt.</summary>
     [Conditional("DEBUG")]
     public static void BeginRequest(string userInput, string renderedPrompt)
@@ -65,6 +77,34 @@ public static class InferenceLog
         {
             File.AppendAllText(LogPath,
                 $"\n\n[End] {tokenCount} tokens | {stopReason}\n");
+        }
+        catch { }
+    }
+
+    /// <summary>Log a tool execution.</summary>
+    [Conditional("DEBUG")]
+    public static void ToolCall(string name, string args, string result, bool isError)
+    {
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine($"[Tool] {name} {(isError ? "FAILED" : "OK")}");
+            sb.AppendLine($"  Args: {(args.Length > 200 ? args[..200] + "..." : args)}");
+            sb.AppendLine($"  Result: {(result.Length > 300 ? result[..300] + "..." : result)}");
+            File.AppendAllText(LogPath, sb.ToString());
+        }
+        catch { }
+    }
+
+    /// <summary>Log an error.</summary>
+    [Conditional("DEBUG")]
+    public static void Error(string context, Exception ex)
+    {
+        try
+        {
+            File.AppendAllText(LogPath,
+                $"\n[ERROR] {context}: {ex.GetType().Name}: {ex.Message}\n  {ex.StackTrace?.Split('\n')[0]}\n");
         }
         catch { }
     }

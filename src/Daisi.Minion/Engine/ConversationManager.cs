@@ -17,8 +17,8 @@ public sealed class ConversationManager : IDisposable
     private DaisiLlogosModelHandle? _modelHandle;
     private readonly string _systemPrompt;
     private readonly List<ToolDefinition> _toolDefinitions;
-    private readonly MinionChatRenderer _renderer;
     private readonly MinionToolFormatter _toolFormatter = MinionToolFormatter.Instance;
+    private int[]? _stopTokenIds;
 
     // Track files that have been read and/or modified during this conversation
     private readonly HashSet<string> _filesRead = new(StringComparer.OrdinalIgnoreCase);
@@ -30,15 +30,21 @@ public sealed class ConversationManager : IDisposable
     /// <summary>Number of tokens currently in the KV cache.</summary>
     public int ContextUsed => _session?.CachedTokenCount ?? 0;
 
+    /// <summary>Stop token IDs including EOS and </tool_call> if available.</summary>
+    public int[]? StopTokenIds => _stopTokenIds;
+
     /// <summary>Render the current conversation as it would be sent to the model (for debugging).</summary>
-    public string RenderPrompt() =>
-        _session?.History != null ? _renderer.Render(_session.History, addGenerationPrompt: true) : "";
+    public string RenderPrompt()
+    {
+        if (_session?.History == null) return "";
+        var renderer = new MinionChatRenderer(_toolDefinitions);
+        return renderer.Render(_session.History, addGenerationPrompt: true);
+    }
 
     public ConversationManager(string systemPrompt, List<ToolDefinition> toolDefinitions)
     {
         _systemPrompt = systemPrompt;
         _toolDefinitions = toolDefinitions;
-        _renderer = new MinionChatRenderer(toolDefinitions);
     }
 
     public void Initialize(DaisiLlogosModelHandle modelHandle)
@@ -54,7 +60,14 @@ public sealed class ConversationManager : IDisposable
         _filesModified.Clear();
         if (_modelHandle == null) return;
 
-        _session = _modelHandle.CreateChatSession(_systemPrompt, _renderer);
+        var renderer = new MinionChatRenderer(_toolDefinitions);
+        _session = _modelHandle.CreateChatSession(_systemPrompt, renderer);
+
+        // Resolve </tool_call> token ID for stop token
+        var toolCallEndId = _modelHandle.Tokenizer.Vocabulary.TokenToId("</tool_call>");
+        _stopTokenIds = toolCallEndId >= 0
+            ? [_modelHandle.Tokenizer.Vocabulary.EosTokenId, toolCallEndId]
+            : null;
     }
 
     public IAsyncEnumerable<string> SendAsync(string userMessage, GenerationParams parameters, CancellationToken ct)

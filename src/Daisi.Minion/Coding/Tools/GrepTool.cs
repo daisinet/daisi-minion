@@ -30,7 +30,7 @@ public sealed class GrepTool : IMinionTool
 
         var searchPath = arguments["path"]?.GetValue<string>() ?? Directory.GetCurrentDirectory();
         var glob = arguments["glob"]?.GetValue<string>() ?? "*";
-        var maxResults = arguments["max_results"]?.GetValue<int>() ?? 50;
+        var maxResults = ToolArgs.GetInt(arguments, "max_results", 50);
 
         searchPath = Path.GetFullPath(searchPath);
 

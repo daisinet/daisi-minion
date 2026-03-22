@@ -25,7 +25,7 @@ public sealed class FileEditTool : IMinionTool
         var path = arguments["path"]?.GetValue<string>();
         var oldStr = arguments["old_string"]?.GetValue<string>();
         var newStr = arguments["new_string"]?.GetValue<string>();
-        var replaceAll = arguments["replace_all"]?.GetValue<bool>() ?? false;
+        var replaceAll = ToolArgs.GetBool(arguments, "replace_all");
 
         if (string.IsNullOrEmpty(path))
             return ToolResult.Error("Missing required parameter: path");

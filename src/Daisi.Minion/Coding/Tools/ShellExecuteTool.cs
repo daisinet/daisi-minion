@@ -26,7 +26,7 @@ public sealed class ShellExecuteTool : IMinionTool
         if (string.IsNullOrEmpty(command))
             return ToolResult.Error("Missing required parameter: command");
 
-        var timeoutMs = arguments["timeout_ms"]?.GetValue<int>() ?? 120000;
+        var timeoutMs = ToolArgs.GetInt(arguments, "timeout_ms", 120000);
 
         var psi = new ProcessStartInfo
         {
@@ -65,6 +65,13 @@ public sealed class ShellExecuteTool : IMinionTool
 
         var output = stdout.ToString();
         var errors = stderr.ToString();
+
+        // Truncate large outputs to prevent context flooding
+        const int maxOutputChars = 8000;
+        if (output.Length > maxOutputChars)
+            output = output[..maxOutputChars] + $"\n... (truncated, {output.Length - maxOutputChars} chars omitted)";
+        if (errors.Length > maxOutputChars)
+            errors = errors[..maxOutputChars] + $"\n... (truncated)";
 
         if (process.ExitCode != 0)
         {

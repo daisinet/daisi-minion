@@ -17,4 +17,7 @@
     <ProjectReference Include="..\..\..\daisi-hosts-dotnet\Daisi.Host.Core\Daisi.Host.Core.csproj" />
     <ProjectReference Include="..\..\..\daisi-sdk-dotnet\Daisi.SDK\Daisi.SDK.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Folder Include="bin\Debug\net10.0\" />
+  </ItemGroup>
 </Project>

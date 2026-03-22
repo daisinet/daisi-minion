@@ -44,8 +44,11 @@ public sealed class ProjectContext
             sb.AppendLine("- Git status:");
             sb.AppendLine(GitStatus);
         }
-        // File tree omitted from system prompt to save tokens.
-        // The model can use glob and file_read to explore as needed.
+        if (!string.IsNullOrEmpty(FileTree))
+        {
+            sb.AppendLine("- Files:");
+            sb.AppendLine(FileTree);
+        }
 
         return sb.ToString();
     }
@@ -73,40 +76,22 @@ public sealed class ProjectContext
     private Task<string> BuildFileTree(CancellationToken ct)
     {
         var sb = new StringBuilder();
-        BuildTree(sb, WorkingDirectory, "", 0, maxDepth: 3);
-        return Task.FromResult(sb.ToString());
-    }
-
-    private static void BuildTree(StringBuilder sb, string dir, string indent, int depth, int maxDepth)
-    {
-        if (depth >= maxDepth) return;
-
-        var dirName = Path.GetFileName(dir);
-        if (dirName is ".git" or "node_modules" or "bin" or "obj" or ".vs" or ".idea")
-            return;
-
         try
         {
-            var entries = Directory.GetFileSystemEntries(dir)
-                .OrderBy(e => !Directory.Exists(e))
-                .ThenBy(e => Path.GetFileName(e))
+            var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { ".git", "node_modules", "bin", "obj", ".vs", ".idea" };
+
+            var entries = Directory.GetFileSystemEntries(WorkingDirectory)
+                .Select(Path.GetFileName)
+                .Where(n => n != null && !skip.Contains(n!))
+                .OrderBy(n => n)
                 .Take(30)
                 .ToList();
 
-            foreach (var entry in entries)
-            {
-                var name = Path.GetFileName(entry);
-                if (Directory.Exists(entry))
-                {
-                    sb.AppendLine($"{indent}{name}/");
-                    BuildTree(sb, entry, indent + "  ", depth + 1, maxDepth);
-                }
-                else
-                {
-                    sb.AppendLine($"{indent}{name}");
-                }
-            }
+            foreach (var name in entries)
+                sb.AppendLine($"  {name}");
         }
         catch { }
+        return Task.FromResult(sb.ToString());
     }
 }

@@ -314,7 +314,7 @@ public sealed class CliRunner : IDisposable
         var roleName = _roleArg ?? _configManager.Config.ActiveRole ?? "chat";
         var roles = new RoleManager();
         var sb = new StringBuilder();
-        sb.AppendLine($"You are {_configManager.Config.MinionName}, a local AI assistant.");
+        sb.AppendLine($"You name is {_configManager.Config.MinionName}, a local DAISI assistant.");
         sb.AppendLine();
 
         if (!roles.Exists(roleName)) roleName = "chat";

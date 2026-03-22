@@ -88,7 +88,12 @@ public sealed class LayoutManager : IDisposable
         UpdateStatusBar();
         RedrawCommandBar("", 0);
 
-        _resizeTimer = new Timer(_ => CheckResize(), null, 250, 250);
+        _resizeTimer = new Timer(_ =>
+        {
+            // Check without lock first (cheap) to avoid lock contention
+            if (Console.WindowWidth == _termWidth && Console.WindowHeight == _termHeight) return;
+            CheckResize();
+        }, null, 250, 250);
     }
 
     /// <summary>Write text into the content scroll region.</summary>
@@ -171,6 +176,8 @@ public sealed class LayoutManager : IDisposable
     /// <summary>Redraw the command bar.</summary>
     public void RedrawCommandBar(string text, int cursorPos)
     {
+        _lastCommandText = text;
+        _lastCursorPos = cursorPos;
         var newHeight = CommandBar.HeightForText(text, _termWidth);
         var maxHeight = Math.Max(1, (_termHeight - 6) / 2);
         newHeight = Math.Min(newHeight, maxHeight);
@@ -285,7 +292,28 @@ public sealed class LayoutManager : IDisposable
         _termWidth = w;
         _termHeight = h;
 
+        // Full screen clear + layout rebuild
+        var buf = new StringBuilder();
+        buf.Append(HideCursor);
+
+        // Remove scroll region temporarily so we can clear everything
+        buf.Append($"{Esc}r");
+
+        // Clear entire screen
+        buf.Append($"{Esc}2J");
+
+        // Move to top
+        buf.Append($"{Esc}1;1H");
+
+        Flush(buf);
+
+        // Re-establish scroll region and redraw all fixed UI
         SetScrollRegion();
         UpdateStatusBar();
+        RedrawCommandBar(_lastCommandText ?? "", _lastCursorPos);
     }
+
+    // Track last command bar state for resize redraws
+    private string? _lastCommandText;
+    private int _lastCursorPos;
 }

@@ -15,7 +15,7 @@ public sealed class FileReadTool : IMinionTool
         {
             ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Absolute or relative file path" },
             ["offset"] = new JsonObject { ["type"] = "integer", ["description"] = "Line number to start from (1-based, default 1)" },
-            ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max lines to read (default 200)" },
+            ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max lines to read (default 2000)" },
         },
         ["required"] = new JsonArray("path"),
     };
@@ -30,8 +30,8 @@ public sealed class FileReadTool : IMinionTool
         if (!File.Exists(path))
             return ToolResult.Error($"File not found: {path}");
 
-        int offset = arguments["offset"]?.GetValue<int>() ?? 1;
-        int limit = arguments["limit"]?.GetValue<int>() ?? 200;
+        int offset = ToolArgs.GetInt(arguments, "offset", 1);
+        int limit = ToolArgs.GetInt(arguments, "limit", 2000);
         if (offset < 1) offset = 1;
 
         var lines = await File.ReadAllLinesAsync(path, ct);
