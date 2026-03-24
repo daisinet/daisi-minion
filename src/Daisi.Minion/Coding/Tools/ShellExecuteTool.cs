@@ -6,6 +6,10 @@ namespace Daisi.Minion.Coding.Tools;
 
 public sealed class ShellExecuteTool : IMinionTool
 {
+    private readonly ToolSandbox? _sandbox;
+
+    public ShellExecuteTool(ToolSandbox? sandbox = null) => _sandbox = sandbox;
+
     public string Name => "shell";
     public string Description => "Execute a shell command and return its output. Use for builds, tests, git operations, or any terminal command.";
 
@@ -27,6 +31,7 @@ public sealed class ShellExecuteTool : IMinionTool
             return ToolResult.Error("Missing required parameter: command");
 
         var timeoutMs = ToolArgs.GetInt(arguments, "timeout_ms", 120000);
+        var workDir = _sandbox?.Root ?? Directory.GetCurrentDirectory();
 
         var psi = new ProcessStartInfo
         {
@@ -36,7 +41,7 @@ public sealed class ShellExecuteTool : IMinionTool
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = Directory.GetCurrentDirectory(),
+            WorkingDirectory = workDir,
         };
 
         using var process = new Process { StartInfo = psi };
@@ -66,7 +71,6 @@ public sealed class ShellExecuteTool : IMinionTool
         var output = stdout.ToString();
         var errors = stderr.ToString();
 
-        // Truncate large outputs to prevent context flooding
         const int maxOutputChars = 8000;
         if (output.Length > maxOutputChars)
             output = output[..maxOutputChars] + $"\n... (truncated, {output.Length - maxOutputChars} chars omitted)";

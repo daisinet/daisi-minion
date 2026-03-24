@@ -4,6 +4,10 @@ namespace Daisi.Minion.Coding.Tools;
 
 public sealed class FileEditTool : IMinionTool
 {
+    private readonly ToolSandbox? _sandbox;
+
+    public FileEditTool(ToolSandbox? sandbox = null) => _sandbox = sandbox;
+
     public string Name => "file_edit";
     public string Description => "Perform a search-and-replace edit on a file. The old_string must match exactly (including whitespace). Use replace_all to replace all occurrences.";
 
@@ -34,7 +38,9 @@ public sealed class FileEditTool : IMinionTool
         if (newStr is null)
             return ToolResult.Error("Missing required parameter: new_string");
 
-        path = Path.GetFullPath(path);
+        try { path = _sandbox?.ResolvePath(path) ?? Path.GetFullPath(path); }
+        catch (InvalidOperationException ex) { return ToolResult.Error(ex.Message); }
+
         if (!File.Exists(path))
             return ToolResult.Error($"File not found: {path}");
 
@@ -50,7 +56,6 @@ public sealed class FileEditTool : IMinionTool
 
         if (!replaceAll)
         {
-            // Ensure unique match
             int first = content.IndexOf(oldStr, StringComparison.Ordinal);
             int second = content.IndexOf(oldStr, first + 1, StringComparison.Ordinal);
             if (second >= 0)

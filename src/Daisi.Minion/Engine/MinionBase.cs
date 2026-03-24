@@ -27,6 +27,8 @@ public abstract class MinionBase : IDisposable
     protected DaisiLlogosModelHandle? ModelHandle;
     protected int ActiveContextSize;
 
+    protected readonly ToolSandbox Sandbox;
+
     protected MinionBase(ConfigManager configManager)
     {
         ConfigManager = configManager;
@@ -36,23 +38,23 @@ public abstract class MinionBase : IDisposable
             workDir = Directory.GetCurrentDirectory();
         Directory.SetCurrentDirectory(workDir);
 
+        Sandbox = new ToolSandbox(workDir);
         ProjectContext = new ProjectContext(workDir);
         RegisterBaseTools();
     }
 
     /// <summary>
-    /// Register the 7 base tools and seal them so modules cannot replace them.
-    /// Subclasses can call RegisterAdditionalTools() to add more before sealing.
+    /// Register the 7 base tools with sandbox scoping and seal them so modules cannot replace them.
     /// </summary>
     private void RegisterBaseTools()
     {
-        ToolRegistry.Register(new FileReadTool());
-        ToolRegistry.Register(new FileWriteTool());
-        ToolRegistry.Register(new FileEditTool());
-        ToolRegistry.Register(new GrepTool());
-        ToolRegistry.Register(new GlobTool());
-        ToolRegistry.Register(new ShellExecuteTool());
-        ToolRegistry.Register(new GitTool());
+        ToolRegistry.Register(new FileReadTool(Sandbox));
+        ToolRegistry.Register(new FileWriteTool(Sandbox));
+        ToolRegistry.Register(new FileEditTool(Sandbox));
+        ToolRegistry.Register(new GrepTool(Sandbox));
+        ToolRegistry.Register(new GlobTool(Sandbox));
+        ToolRegistry.Register(new ShellExecuteTool(Sandbox));
+        ToolRegistry.Register(new GitTool(Sandbox));
         ToolRegistry.SealBaseTools();
     }
 

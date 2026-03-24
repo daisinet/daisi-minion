@@ -5,6 +5,10 @@ namespace Daisi.Minion.Coding.Tools;
 
 public sealed class GlobTool : IMinionTool
 {
+    private readonly ToolSandbox? _sandbox;
+
+    public GlobTool(ToolSandbox? sandbox = null) => _sandbox = sandbox;
+
     public string Name => "glob";
     public string Description => "Find files matching a glob pattern. Returns matching file paths sorted by modification time.";
 
@@ -25,17 +29,27 @@ public sealed class GlobTool : IMinionTool
         if (string.IsNullOrEmpty(pattern))
             return Task.FromResult(ToolResult.Error("Missing required parameter: pattern"));
 
-        var searchPath = arguments["path"]?.GetValue<string>() ?? Directory.GetCurrentDirectory();
-        searchPath = Path.GetFullPath(searchPath);
+        var searchPathArg = arguments["path"]?.GetValue<string>();
+        string searchPath;
+        try
+        {
+            searchPath = searchPathArg != null
+                ? (_sandbox?.ResolvePath(searchPathArg) ?? Path.GetFullPath(searchPathArg))
+                : (_sandbox?.Root ?? Directory.GetCurrentDirectory());
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Task.FromResult(ToolResult.Error(ex.Message));
+        }
 
         if (!Directory.Exists(searchPath))
             return Task.FromResult(ToolResult.Error($"Directory not found: {searchPath}"));
 
-        // Convert glob to search pattern
         var searchPattern = pattern.Replace("**/", "");
         if (string.IsNullOrEmpty(searchPattern)) searchPattern = "*";
 
         var searchOption = pattern.Contains("**/") ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+        var relativeRoot = _sandbox?.Root ?? Directory.GetCurrentDirectory();
 
         var files = Directory.EnumerateFiles(searchPath, searchPattern, searchOption)
             .Where(f => !IsIgnored(f))
@@ -49,7 +63,7 @@ public sealed class GlobTool : IMinionTool
         var sb = new StringBuilder();
         foreach (var file in files)
         {
-            var relPath = Path.GetRelativePath(Directory.GetCurrentDirectory(), file);
+            var relPath = Path.GetRelativePath(relativeRoot, file);
             sb.AppendLine(relPath);
         }
 
