@@ -6,6 +6,10 @@ namespace Daisi.Minion.Coding.Tools;
 
 public sealed class GrepTool : IMinionTool
 {
+    private readonly ToolSandbox? _sandbox;
+
+    public GrepTool(ToolSandbox? sandbox = null) => _sandbox = sandbox;
+
     public string Name => "grep";
     public string Description => "Search for a regex pattern in files. Returns matching lines with file paths and line numbers. Respects .gitignore.";
 
@@ -28,11 +32,18 @@ public sealed class GrepTool : IMinionTool
         if (string.IsNullOrEmpty(pattern))
             return ToolResult.Error("Missing required parameter: pattern");
 
-        var searchPath = arguments["path"]?.GetValue<string>() ?? Directory.GetCurrentDirectory();
+        var searchPathArg = arguments["path"]?.GetValue<string>();
+        string searchPath;
+        try
+        {
+            searchPath = searchPathArg != null
+                ? (_sandbox?.ResolvePath(searchPathArg) ?? Path.GetFullPath(searchPathArg))
+                : (_sandbox?.Root ?? Directory.GetCurrentDirectory());
+        }
+        catch (InvalidOperationException ex) { return ToolResult.Error(ex.Message); }
+
         var glob = arguments["glob"]?.GetValue<string>() ?? "*";
         var maxResults = ToolArgs.GetInt(arguments, "max_results", 50);
-
-        searchPath = Path.GetFullPath(searchPath);
 
         Regex regex;
         try { regex = new Regex(pattern, RegexOptions.Compiled); }
@@ -40,6 +51,7 @@ public sealed class GrepTool : IMinionTool
 
         var sb = new StringBuilder();
         int count = 0;
+        var relativeRoot = _sandbox?.Root ?? Directory.GetCurrentDirectory();
 
         IEnumerable<string> files;
         if (File.Exists(searchPath))
@@ -63,7 +75,7 @@ public sealed class GrepTool : IMinionTool
             {
                 if (regex.IsMatch(lines[i]))
                 {
-                    var relPath = Path.GetRelativePath(Directory.GetCurrentDirectory(), file);
+                    var relPath = Path.GetRelativePath(relativeRoot, file);
                     sb.AppendLine($"{relPath}:{i + 1}: {lines[i]}");
                     count++;
                 }

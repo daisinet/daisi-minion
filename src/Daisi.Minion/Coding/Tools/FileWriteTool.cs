@@ -4,6 +4,10 @@ namespace Daisi.Minion.Coding.Tools;
 
 public sealed class FileWriteTool : IMinionTool
 {
+    private readonly ToolSandbox? _sandbox;
+
+    public FileWriteTool(ToolSandbox? sandbox = null) => _sandbox = sandbox;
+
     public string Name => "file_write";
     public string Description => "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Creates parent directories as needed.";
 
@@ -28,7 +32,9 @@ public sealed class FileWriteTool : IMinionTool
         if (content is null)
             return ToolResult.Error("Missing required parameter: content");
 
-        path = Path.GetFullPath(path);
+        try { path = _sandbox?.ResolvePath(path) ?? Path.GetFullPath(path); }
+        catch (InvalidOperationException ex) { return ToolResult.Error(ex.Message); }
+
         var dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);

@@ -5,6 +5,10 @@ namespace Daisi.Minion.Coding.Tools;
 
 public sealed class FileReadTool : IMinionTool
 {
+    private readonly ToolSandbox? _sandbox;
+
+    public FileReadTool(ToolSandbox? sandbox = null) => _sandbox = sandbox;
+
     public string Name => "file_read";
     public string Description => "Read a file from disk. Returns the file content with line numbers. Use offset and limit for large files.";
 
@@ -26,7 +30,9 @@ public sealed class FileReadTool : IMinionTool
         if (string.IsNullOrEmpty(path))
             return ToolResult.Error("Missing required parameter: path");
 
-        path = Path.GetFullPath(path);
+        try { path = _sandbox?.ResolvePath(path) ?? Path.GetFullPath(path); }
+        catch (InvalidOperationException ex) { return ToolResult.Error(ex.Message); }
+
         if (!File.Exists(path))
             return ToolResult.Error($"File not found: {path}");
 

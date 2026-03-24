@@ -6,6 +6,10 @@ namespace Daisi.Minion.Coding.Tools;
 
 public sealed class GitTool : IMinionTool
 {
+    private readonly ToolSandbox? _sandbox;
+
+    public GitTool(ToolSandbox? sandbox = null) => _sandbox = sandbox;
+
     public string Name => "git";
     public string Description => "Run git commands. Supports: status, diff, log, add, commit, branch, checkout. For safety, push and destructive commands are not supported.";
 
@@ -31,6 +35,8 @@ public sealed class GitTool : IMinionTool
         if (BlockedCommands.Contains(firstWord))
             return ToolResult.Error($"git {firstWord} is blocked for safety. Use the shell tool if you must.");
 
+        var workDir = _sandbox?.Root ?? Directory.GetCurrentDirectory();
+
         var psi = new ProcessStartInfo
         {
             FileName = "git",
@@ -39,7 +45,7 @@ public sealed class GitTool : IMinionTool
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = Directory.GetCurrentDirectory(),
+            WorkingDirectory = workDir,
         };
 
         using var process = new Process { StartInfo = psi };
