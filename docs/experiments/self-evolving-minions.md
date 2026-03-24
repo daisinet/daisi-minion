@@ -625,6 +625,160 @@ graph LR
     style Eval fill:#ddf,stroke:#00a
 ```
 
+## Future: Distributed Minions
+
+Today all minions run on one machine. Long term, minions should run across multiple machines on a network — and eventually, Daisinet hosts themselves could act as minions.
+
+The architecture already points in this direction. The SummonerMinion doesn't care if a CodeMinion is a local process or a machine across the room. It spawns, messages, and reads output through the same interface. The jump from local to distributed is transport, not architecture.
+
+### Network Discovery
+
+Minions announce themselves on the local network via UDP broadcast. A SummonerMinion (or any minion that needs to find peers) listens for announcements and builds a roster of available minions.
+
+```mermaid
+graph TB
+    subgraph Network["Local Network"]
+        subgraph Machine_A["Machine A (4090)"]
+            SA["SummonerMinion"]
+            CA["CodeMinion-1"]
+            DA["Darwin"]
+        end
+
+        subgraph Machine_B["Machine B (2x 3090)"]
+            CB["CodeMinion-2"]
+            CB2["CodeMinion-3"]
+        end
+
+        subgraph Machine_C["Machine C (CPU)"]
+            RC["ResearchMinion-1"]
+            TC["TestMinion-1"]
+        end
+
+        subgraph Host_D["Daisinet Host D"]
+            HD["HostMinion<br/><i>Idle host acting<br/>as a minion</i>"]
+        end
+    end
+
+    SA <-->|"UDP discovery<br/>+ gRPC work"| CB
+    SA <-->|"UDP discovery<br/>+ gRPC work"| CB2
+    SA <-->|"UDP discovery<br/>+ gRPC work"| RC
+    SA <-->|"UDP discovery<br/>+ gRPC work"| TC
+    SA <-->|"UDP discovery<br/>+ gRPC work"| HD
+    SA --> CA
+    SA --> DA
+
+    style Machine_A fill:#efe,stroke:#0a0
+    style Machine_B fill:#eef,stroke:#00a
+    style Machine_C fill:#ffe,stroke:#aa0
+    style Host_D fill:#fef,stroke:#a0a
+```
+
+Discovery protocol:
+- Each minion broadcasts a UDP announcement on a well-known port (e.g. every 30s)
+- Announcement contains: minion type, available capacity (VRAM, context slots), loaded model, current status (idle/busy), auth token fingerprint
+- Listeners build a live roster, evict stale entries after N missed heartbeats
+- gRPC used for actual work (spawn, message, output streaming) once discovered
+
+### Authentication
+
+Minions on a network need mutual auth. Options that integrate with existing infrastructure:
+
+- **Shared account key** — all minions on the network belong to the same Daisinet account. The account's client key is the trust anchor. Simple, works for single-user/team setups.
+- **ORC-mediated auth** — minions register with the ORC, which issues session tokens. Peers verify tokens with the ORC. Works for multi-account setups.
+- **mTLS** — each minion gets a certificate signed by the account's CA. Peers verify certs directly, no ORC dependency. Best for offline/air-gapped networks.
+
+### Hardware-Aware Scheduling
+
+A SummonerMinion that knows the network's hardware profile makes better decisions:
+
+| Machine | Hardware | Best For |
+|---------|----------|----------|
+| Workstation (4090, 24GB) | Fast single-GPU inference | CodeMinion on complex tasks, Darwin's fast loop |
+| Server (2x 3090, 48GB total) | Large models, parallel sessions | Multiple CodeMinions, big context windows |
+| Laptop (CPU only) | Slow inference, always available | ResearchMinion, TestMinion (mostly tool execution, little inference) |
+| Daisinet Host (idle) | Variable, opportunistic | Overflow work, background Darwin evolution |
+
+The SummonerMinion doesn't need to be told this. It discovers capacity via the UDP announcements and learns which machines perform best for which task types through the evaluation loop. Over time, Darwin can evolve the SummonerModule's scheduling strategy based on real outcomes.
+
+### Daisinet Hosts as Minions
+
+The DualModeOrchestrator already has the concept of "idle → offer model to the network." This extends naturally: an idle Daisinet host doesn't just serve raw inference — it becomes a full minion with tools, modules, and an agentic loop.
+
+- Host is busy serving inference to ORC consumers → normal host mode
+- Host goes idle → spins up as a minion, announces itself on the network
+- SummonerMinion discovers it, assigns background tasks (Darwin evolution, research, test runs)
+- Host gets a real inference request from ORC → pauses minion work, serves the request, resumes
+
+The minion work is interruptible because it's just conversation state. Save context, yield GPU, restore when idle again.
+
+### Federated Evolution
+
+Darwin instances running on different machines evolve the same modules independently against different workloads:
+
+```mermaid
+graph TB
+    subgraph Machine_A["Machine A"]
+        DA["Darwin-A<br/><i>evolves react-reviewer<br/>against frontend tasks</i>"]
+    end
+
+    subgraph Machine_B["Machine B"]
+        DB["Darwin-B<br/><i>evolves react-reviewer<br/>against fullstack tasks</i>"]
+    end
+
+    DA -->|"commit v2a"| Git["DaisiGit<br/><i>modules/react-reviewer</i>"]
+    DB -->|"commit v2b"| Git
+
+    Git -->|"both versions<br/>compete on<br/>real tasks"| Eval["Evaluation<br/>History"]
+    Eval -->|"best version<br/>becomes default"| Winner["Winner"]
+
+    style Git fill:#ddf,stroke:#00a
+    style Eval fill:#ffd,stroke:#aa0
+```
+
+Machine A's Darwin improves react-reviewer based on frontend-heavy work. Machine B's Darwin improves it based on fullstack work. Both commit to DaisiGit branches. The SummonerMinion sees both versions, tries them on real tasks, and the best one wins. Natural selection across a population, not just a single lineage.
+
+### Minion Migration
+
+A long-running minion can be paused on one machine and resumed on another:
+
+1. Save conversation state (history, file tracking, module state)
+2. Serialize to a portable format
+3. Transfer to target machine
+4. Reload model (or reuse already-loaded model if compatible)
+5. Restore conversation state
+6. Resume from where it left off
+
+Use cases:
+- Machine A needs its GPU for a higher-priority task → migrate CodeMinion to Machine B
+- User moves from desktop to laptop → their minion follows
+- Load balancing — SummonerMinion migrates work toward idle capacity
+
+The minion doesn't know it moved. From its perspective, it just had a brief pause.
+
+### Swarm Coordination
+
+Multiple SummonerMinions across machines can coordinate on large projects:
+
+- **SummonerMinion-A** on Machine A owns the frontend feature
+- **SummonerMinion-B** on Machine B owns the backend API
+- They communicate via `@` addressing across the network
+- Each spawns local workers on their own machine (or on discovered idle machines)
+- They negotiate shared resources: "I need a CodeMinion with the big model for 10 minutes" / "OK, I'll pause my ResearchMinion"
+
+This isn't a central controller — it's a federation of peers. No single point of failure. If Machine A goes offline, Machine B's summoner can pick up its incomplete tasks.
+
+### `@` Addressing Across Machines
+
+The `@` addressing system extends transparently to the network:
+
+```
+@Darwin "improve the react module"              → routed to Darwin wherever it's running
+@Machine-B:CodeMinion-2 "use the v2 API"        → explicit machine targeting
+@CodeMinion-* "stop and wait for new instructions" → broadcast to all CodeMinions
+```
+
+The routing layer resolves names against the discovery roster. Local minions are resolved immediately; remote minions are reached via gRPC. The sender doesn't need to know where the target is.
+
 ## Open Questions
 
 1. **Module composition conflicts** — What happens when two modules both define `PostProcess`? Chain them? Priority order? Let the summoner decide?
