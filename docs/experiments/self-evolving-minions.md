@@ -843,13 +843,42 @@ These are core tenant level constraints — immutable, not something Darwin can 
 
 6. **Who spawns the first SummonerMinion?** — The user directly? Or is there always a root-level one running?
 
-## Next Steps
+## Implementation Phases
 
-1. Extract `Minion` base class from `MinionEngine`
-2. Define `IMinionModule` interface and `MinionModuleContext`
-3. Build `MinionCompiler` (Roslyn compilation with AST safety gates)
-4. Build `MinionModuleLoader` (load from `~/.daisi-minion/modules/`, compile, cache)
-5. Wire module extension points into the agentic loop
-6. Create `CodeMinion` as first concrete type (essentially current `MinionEngine`)
-7. Build a simple evaluation recording system
-8. Add `--module` flag to CLI mode for summoner integration
+Seven phases, each independently shippable. Phases 4 and 5 can run in parallel.
+
+```mermaid
+graph TD
+    P1["Phase 1<br/><b>Extract Base Class</b><br/><i>MinionBase from MinionEngine + CliRunner</i>"]
+    P2["Phase 2<br/><b>Sandboxed Tools</b><br/><i>Path scoping, shell restrictions</i>"]
+    P3["Phase 3<br/><b>Modules + Roslyn</b><br/><i>IMinionModule, compiler, safety gates</i>"]
+    P4["Phase 4<br/><b>Minion Types</b><br/><i>CodeMinion, TestMinion, ResearchMinion</i>"]
+    P5["Phase 5<br/><b>Benchmarks</b><br/><i>Metrics, weighted scoring, evaluation</i>"]
+    P6["Phase 6<br/><b>SummonerMinion</b><br/><i>Multi-minion orchestration</i>"]
+    P7["Phase 7<br/><b>Darwin</b><br/><i>Fast loop evolution</i>"]
+
+    P1 --> P2 --> P3
+    P3 --> P4
+    P3 --> P5
+    P4 --> P6
+    P5 --> P7
+    P6 --> P7
+
+    style P1 fill:#efe,stroke:#0a0
+    style P2 fill:#efe,stroke:#0a0
+    style P3 fill:#efe,stroke:#0a0
+    style P4 fill:#eef,stroke:#00a
+    style P5 fill:#eef,stroke:#00a
+    style P6 fill:#fef,stroke:#a0a
+    style P7 fill:#ffd,stroke:#aa0
+```
+
+| Phase | Deliverable | Key Files |
+|-------|-------------|-----------|
+| **1. Extract Base Class** | `MinionBase` abstract class, both modes inherit it, zero behavior change | `Engine/MinionBase.cs` |
+| **2. Sandboxed Tools** | Tools enforce working directory boundary, path escapes blocked | `Coding/ToolSandbox.cs`, all 7 tools modified |
+| **3. Modules + Roslyn** | `IMinionModule` interface, Roslyn compiler with AST safety gates, module loader | `Modules/` folder (7 new files) |
+| **4. Minion Types** | `CodeMinion`, `TestMinion`, `ResearchMinion` as concrete types, `--type` flag | `Types/` folder |
+| **5. Benchmarks** | Metrics collection, weighted scoring, persistent evaluation per module | `Benchmarks/` folder |
+| **6. SummonerMinion** | Multi-minion orchestration, shared model, child lifecycle | `Types/SummonerMinion.cs`, `Orchestration/` folder |
+| **7. Darwin** | Fast loop evolution (write → compile → test → benchmark → commit/revert) | `Types/DarwinMinion.cs`, `Evolution/` folder |
