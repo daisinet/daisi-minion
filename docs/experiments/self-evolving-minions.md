@@ -779,6 +779,56 @@ The `@` addressing system extends transparently to the network:
 
 The routing layer resolves names against the discovery roster. Local minions are resolved immediately; remote minions are reached via gRPC. The sender doesn't need to know where the target is.
 
+### Marketplace SecureTools
+
+Minions should be able to call SecureTools from the marketplace. The infrastructure already exists: provider-hosted endpoints, per-install auth (`SecureInstallId`), setup parameters, execution credit costs. A minion calling a SecureTool is no different from a bot calling one — an authenticated HTTP request to the provider's endpoint. The sandbox stays intact because SecureTools run on the provider's infrastructure, not inside the minion.
+
+```mermaid
+graph LR
+    subgraph Minion["CodeMinion (sandboxed)"]
+        Mod["SecurityModule<br/><i>PostProcess hook</i>"]
+    end
+
+    subgraph Marketplace["Marketplace"]
+        ST["SecureTool<br/><i>SAST Scanner</i><br/><i>runs on provider server</i>"]
+    end
+
+    subgraph Account["Account"]
+        Credits["Credit Balance"]
+        Budget["Per-Task Budget"]
+    end
+
+    Mod -->|"API call + SecureInstallId"| ST
+    ST -->|"results"| Mod
+    ST -->|"deducts"| Credits
+    Budget -->|"caps spending"| Mod
+
+    style Minion fill:#efe,stroke:#0a0
+    style Marketplace fill:#eef,stroke:#00a
+    style Account fill:#ffd,stroke:#aa0
+```
+
+**Minions as marketplace consumers.** A CodeMinion with a `SecurityModule` calls a paid SAST scanning SecureTool on the code it just wrote. A ResearchMinion calls a SecureTool that queries a proprietary knowledge base. The minion doesn't need the tool's source code — it just calls the API.
+
+**Darwin discovers and adopts SecureTools.** If Darwin sees that CodeMinions keep failing security reviews, it can browse the marketplace, find a security scanning SecureTool, and write a module that integrates it into PostProcess. Darwin just taught itself to use a paid service to improve outcomes.
+
+**Credit budgets.** Every SecureTool call costs credits. Darwin needs a budget. The SummonerMinion (or the account) sets a credit ceiling per task. This introduces a new benchmark:
+
+| Benchmark | Measures |
+|-----------|----------|
+| Credits spent per task | Cost efficiency of SecureTool usage |
+
+A minion that burns through credits on unnecessary SecureTool calls gets a bad weighted score. Darwin learns to use paid tools judiciously — only when the improvement justifies the cost.
+
+**Data exfiltration rules.** SecureTools run externally, so the minion is sending code/data to a third-party provider. The constitution needs rules about what can leave the sandbox:
+
+- No credentials or secrets (API keys, tokens, connection strings)
+- No files outside the task's working directory
+- Proprietary code only with explicit account-level approval
+- All outbound data logged for audit
+
+These are core tenant level constraints — immutable, not something Darwin can evolve away.
+
 ## Open Questions
 
 1. **Module composition conflicts** — What happens when two modules both define `PostProcess`? Chain them? Priority order? Let the summoner decide?
