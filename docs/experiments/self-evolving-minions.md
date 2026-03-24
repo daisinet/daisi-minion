@@ -42,8 +42,12 @@ Minion (base)
   │     Read-only exploration loop, summarization output
   │     + CodebaseAnalysisModule, DependencyAuditModule, etc.
   │
-  └── EvolutionMinion
-        Meta-minion that improves other minions (see below)
+  ├── SummonerMinion
+  │     Orchestration loop, spawns and coordinates other minions
+  │     + SprintPlannerModule, PairProgrammingModule, etc.
+  │
+  └── Darwin (EvolutionMinion)
+        Meta-minion that evolves other minions and itself (see below)
 ```
 
 Each type inherits the base runtime but overrides what matters: which tools are registered, what the agentic loop looks like, how completion is detected, what evaluation means.
@@ -145,49 +149,116 @@ The module decides **what** to do. The host decides **how** it's allowed to happ
 | **Summoner-generated** | + process isolation (restricted Windows token, named pipe comms) | LLM wrote it |
 | **Marketplace** | + WASM sandbox (Wasmtime, capability-based) | Strangers wrote it |
 
+## The SummonerMinion
+
+The summoner is just another minion type — not a special privileged process. It inherits the same base runtime but its loop is orchestration, not coding.
+
+**Tools**: `spawn_minion`, `check_minion`, `stop_minion`, `task_board`, `message_minion` (not file_write, not shell)
+**Loop**: Break goal into tasks → spawn typed minions with modules → monitor → merge results
+**Evaluation**: Did the team deliver? Any merge conflicts? How many minions got stuck?
+
+SummonerModules evolve like any other. A `SprintPlannerModule` that keeps causing file conflicts between CodeMinions can be improved by Darwin. A `PairProgrammingModule` that pairs two minions on the same problem for cross-checking is a different coordination strategy — both can be scored and compared.
+
+The summoner is a lazy leader. It knows which types, modules, and versions exist and their scores. It picks the right combination for the job. It does not write code, evaluate quality, or improve anything — that's Darwin's job.
+
+Who spawns the first SummonerMinion? The user directly, or a root-level one that's always running — TBD.
+
 ## The Evolution Loop
 
-### Actors
+### Darwin (EvolutionMinion)
 
-**Summoner** — A lazy leader. Knows which minion types and modules exist, their scores, which branches and trials are complete. Picks the right combinations for the job. Delegates all real work. Does not write code or evaluate quality.
+Darwin is a specialized minion type whose sole purpose is making other minions better — and making itself better.
 
-**EvolutionMinion** — A specialized minion type whose purpose is improving other minions. It:
+Darwin:
 - Reads evaluation results from completed tasks
-- Analyzes what went wrong or could be better
+- Analyzes patterns across many outcomes (not single tasks)
 - Writes improved `.cs` module source files
 - Tests the improvements (compiles, runs, evaluates)
 - Can evolve itself — its own modules are subject to the same loop
 - Commits improved versions to git branches
+- Can evolve SummonerModules too — improving how work gets coordinated, not just how it gets done
 
-**Working Minions** (CodeMinion, TestMinion, etc.) — Do the actual work. After each task, they self-evaluate and record outcomes.
+### Evaluation Signals
+
+Darwin looks at multiple layers of signal to determine what "better" means:
+
+**Objective signals** — did the thing actually work?
+- CodeMinion: did it compile? did tests pass? did git commit succeed?
+- TestMinion: did it find real bugs? did coverage increase?
+- SummonerMinion: did all spawned minions complete? any merge conflicts?
+
+**User signals** — did the human approve?
+- User accepts output, asks for changes, or rejects it
+- User explicitly rates the result
+- User has to redo the work themselves (strongest negative signal)
+
+**Inferred signals** — what happened after?
+- Did the user edit the minion's output? (partial failure)
+- Did the user revert the commit? (full failure)
+- Was the minion stopped before completion? (stuck or bad approach)
+- How many iterations vs budget? (efficiency)
+
+**Self-assessment** — the minion evaluates itself
+- Retry count, files modified vs task scope, context utilization
+
+```csharp
+public class TaskOutcome
+{
+    // Objective
+    public bool? CompileSuccess { get; set; }
+    public bool? TestsPass { get; set; }
+    public int? TestsAdded { get; set; }
+    public int IterationsUsed { get; set; }
+    public int IterationBudget { get; set; }
+    public double ContextUtilization { get; set; }
+
+    // User
+    public bool? UserApproved { get; set; }
+    public bool? UserEdited { get; set; }
+    public bool? UserReverted { get; set; }
+
+    // Inferred
+    public int FilesModified { get; set; }
+    public bool WasStopped { get; set; }
+    public TimeSpan Duration { get; set; }
+
+    // Self
+    public double SelfScore { get; set; }
+    public string? SelfNotes { get; set; }
+}
+```
+
+Darwin doesn't look at single scores — it looks at patterns. "This module compiles 95% of the time but users edit the output 60% of the time. The code works but isn't what they want." That's a signal to improve the prompt or add a clarification step, not to change the build logic.
+
+The scoring formula itself starts hardcoded (simple weighted average) but is eventually something Darwin can evolve too — its own evaluation of what matters most.
 
 ### The Cycle
 
 ```
-1. Summoner assigns task → CodeMinion + modules
+1. SummonerMinion assigns task → CodeMinion + modules
 2. CodeMinion runs, completes task
-3. CodeMinion self-evaluates → ModuleEvaluation { Score, Notes }
-4. Evaluation stored alongside module version
+3. CodeMinion self-evaluates → TaskOutcome
+4. Outcome stored alongside module version
 
     ... after N tasks ...
 
-5. Summoner spawns EvolutionMinion:
+5. SummonerMinion spawns Darwin:
    "The react-reviewer module scored 0.3 on the last 5 tasks.
     Here are the evaluation notes. Write an improved version."
 
-6. EvolutionMinion:
+6. Darwin:
    a. Reads current module source
-   b. Reads evaluation history
+   b. Reads evaluation history (patterns, not just last run)
    c. Writes improved .cs file
    d. Compiles it (Roslyn) — if it fails, iterates
    e. Commits to a git branch: modules/react-reviewer/v2
    f. Optionally runs a test task to validate
 
-7. Next time summoner needs react review:
+7. Next time SummonerMinion needs react review:
    - Sees v2 branch exists with passing tests
    - Spawns CodeMinion with the v2 module
    - If v2 scores better over time, it becomes the default
-   - If worse, summoner falls back to v1
+   - If worse, SummonerMinion falls back to v1
 ```
 
 ### How This Maps to Hyperagents
@@ -195,11 +266,11 @@ The module decides **what** to do. The host decides **how** it's allowed to happ
 | Hyperagent Concept | Minion Equivalent |
 |---|---|
 | Task Agent (stateless Python) | Working Minions (compiled C# types + modules) |
-| Meta Agent (modifies task agent code) | EvolutionMinion (writes and tests new module source) |
+| Meta Agent (modifies task agent code) | Darwin (writes and tests new module source) |
 | `archive.jsonl` (lineage + scores) | Git history + evaluation records |
 | `model_patch.diff` | Git commits to module `.cs` files |
 | Docker isolation per generation | Git branches per module version |
-| Parent selection (best/latest/random) | Summoner picks module version by score + trial status |
+| Parent selection (best/latest/random) | SummonerMinion picks module version by score + trial status |
 | Staged evaluation (cheap then full) | Quick compile test, then real task evaluation |
 
 Key differences from Hyperagents:
@@ -221,19 +292,21 @@ DaisiGit is the natural home because:
 - Already partitioned by account in Cosmos DB
 - REST API with bot tools (13 tools: ReadFile, BrowseFiles, CreatePR, etc.)
 - Orgs + Teams for permission control
-- The EvolutionMinion can use DaisiGit tools to manage branches and PRs
+- Darwin can use DaisiGit tools to manage branches and PRs
 
 ## Open Questions
 
 1. **Module composition conflicts** — What happens when two modules both define `PostProcess`? Chain them? Priority order? Let the summoner decide?
 
-2. **Evaluation quality** — Self-evaluation is only as good as the model doing the evaluating. Should the summoner (or user) provide ground-truth scores?
+2. **Evaluation quality** — Self-evaluation is only as good as the model doing the evaluating. Should the SummonerMinion (or user) provide ground-truth scores?
 
-3. **Evolution speed** — How many evaluation cycles before the EvolutionMinion should attempt an improvement? Too few = noisy signal. Too many = slow adaptation.
+3. **Evolution speed** — How many evaluation cycles before Darwin should attempt an improvement? Too few = noisy signal. Too many = slow adaptation.
 
-4. **Cross-type evolution** — Can the EvolutionMinion propose that a task should use a different minion *type*, not just different modules? ("This task would work better as a TestMinion, not a CodeMinion.")
+4. **Cross-type evolution** — Can Darwin propose that a task should use a different minion *type*, not just different modules? ("This task would work better as a TestMinion, not a CodeMinion.")
 
-5. **EvolutionMinion evolving itself** — This is recursive self-improvement. What's the stopping condition? Do we need a "constitution" — invariants that no evolution can violate?
+5. **Darwin evolving itself** — This is recursive self-improvement. What's the stopping condition? Do we need a "constitution" — invariants that no evolution can violate?
+
+6. **Who spawns the first SummonerMinion?** — The user directly? Or is there always a root-level one running?
 
 ## Next Steps
 
