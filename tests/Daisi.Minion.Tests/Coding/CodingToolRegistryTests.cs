@@ -43,4 +43,36 @@ public class CodingToolRegistryTests
         Assert.True(result.IsError);
         Assert.Contains("Unknown tool", result.Output);
     }
+
+    [Fact]
+    public void SealBaseTools_PreventsReplacement()
+    {
+        var registry = new CodingToolRegistry();
+        registry.Register(new FileReadTool());
+        registry.SealBaseTools();
+
+        Assert.Throws<InvalidOperationException>(() =>
+            registry.Register(new FileReadTool()));
+    }
+
+    [Fact]
+    public void SealBaseTools_AllowsNewTools()
+    {
+        var registry = new CodingToolRegistry();
+        registry.Register(new FileReadTool());
+        registry.SealBaseTools();
+
+        // A tool with a different name should work fine
+        registry.Register(new FileWriteTool());
+        Assert.Equal(2, registry.Tools.Count);
+    }
+
+    [Fact]
+    public void SealBaseTools_EmptyRegistry_NoError()
+    {
+        var registry = new CodingToolRegistry();
+        registry.SealBaseTools(); // should not throw
+        registry.Register(new FileReadTool());
+        Assert.Single(registry.Tools);
+    }
 }
