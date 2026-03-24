@@ -422,6 +422,46 @@ DaisiGit is the natural home because:
 - Orgs + Teams for permission control
 - Darwin can use DaisiGit tools to manage branches and PRs
 
+## Human Interaction
+
+Humans interact with minions the same way regardless of type — there's nothing special about talking to Darwin vs talking to a CodeMinion. The same interface, same mechanism, same `@` addressing.
+
+### `@` Addressing
+
+The `@` prefix routes a message to a specific minion by name. The TUI input handler parses the target, the mailbox/channel infrastructure delivers it, and the minion interprets it according to its type.
+
+```
+@Darwin "the code minion is too slow on large refactors"
+@Darwin "show me what you've changed this week"
+@Darwin "add a constitution rule: never delete test files"
+@CodeMinion-1 "use explicit types, not var"
+@CodeMinion-1 "stop, that's the wrong approach"
+@Summoner "that task is too big for one minion, split it"
+@TestMinion-1 "focus on edge cases, not happy paths"
+```
+
+Under the hood: `@Name message` → `SendMessage(to: "name", content: "message")` through the existing channel infrastructure. The minion receives it in its inbox and incorporates it into its next iteration.
+
+### Interaction Modes
+
+These apply to every minion type. The difference is what each type *does* with the input.
+
+| Mode | Description | Example |
+|------|-------------|---------|
+| **Passive** | Minion works autonomously, human doesn't intervene | Darwin evolves modules in the background, things just get better |
+| **Directive** | Human sends a message mid-task, minion adjusts | `@CodeMinion-1 "don't refactor, just fix the bug"` |
+| **Review gate** | Minion proposes, human approves before it takes effect | Darwin: "Improved react-reviewer v1→v2, iterations -30%. Approve?" |
+| **Retrospective** | Human asks any minion to explain what it did and why | `@Darwin "what did you change this week and what improved?"` |
+| **Constitution** | Human sets rules that constrain behavior across all future tasks | `@Darwin "prioritize correctness over speed in all modules"` |
+
+The human picks their comfort level. Early on, review gate for Darwin. As trust builds, passive with occasional retrospectives. Directives when the human has specific insight. Constitution always.
+
+### Every Interaction Is Training Data
+
+When a human corrects a CodeMinion mid-task, that's a signal Darwin can learn from. When a human overrides a SummonerMinion's task breakdown, that's a signal too. When a human approves or rejects a Darwin proposal, that directly feeds the evaluation loop.
+
+Every `@` message, every approval, every rejection, every time the human redoes a minion's work — it all flows into `TaskOutcome` and shapes future evolution. The human doesn't need to explicitly rate things (though they can). Their actions are the rating.
+
 ## Open Questions
 
 1. **Module composition conflicts** — What happens when two modules both define `PostProcess`? Chain them? Priority order? Let the summoner decide?
