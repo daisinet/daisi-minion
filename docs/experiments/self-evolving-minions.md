@@ -21,33 +21,67 @@ Prompt-level differentiation (skills) is interpreted by the model. It's a sugges
 
 Skills are soft. Modules are hard. Minion types are structural.
 
+```mermaid
+graph LR
+    Skills["Skills<br/><i>Prompt markdown</i>"]
+    Modules["Modules<br/><i>Compiled C#</i>"]
+    Types["Minion Types<br/><i>Different programs</i>"]
+
+    Skills -->|"Soft<br/>model interprets"| Modules -->|"Hard<br/>code executes"| Types
+
+    style Skills fill:#ffd,stroke:#aa0
+    style Modules fill:#dfd,stroke:#0a0
+    style Types fill:#ddf,stroke:#00a
+```
+
 ### Minion Type Hierarchy
 
-```
-Minion (base)
-  │
-  │  Model loading, inference, conversation management
-  │  Hardcoded sandboxed tools (file, shell, git, grep, glob)
-  │  Base agentic loop
-  │
-  ├── CodeMinion
-  │     Code-focused loop, build/test tools, git workflow
-  │     + ReactModule, SecurityModule, etc.
-  │
-  ├── TestMinion
-  │     Test-run-analyze-fix loop, coverage tools
-  │     + IntegrationTestModule, LoadTestModule, etc.
-  │
-  ├── ResearchMinion
-  │     Read-only exploration loop, summarization output
-  │     + CodebaseAnalysisModule, DependencyAuditModule, etc.
-  │
-  ├── SummonerMinion
-  │     Orchestration loop, spawns and coordinates other minions
-  │     + SprintPlannerModule, PairProgrammingModule, etc.
-  │
-  └── Darwin (EvolutionMinion)
-        Meta-minion that evolves other minions and itself (see below)
+```mermaid
+classDiagram
+    class Minion {
+        <<abstract>>
+        Model loading, inference
+        Conversation management
+        Sandboxed base tools
+        Base agentic loop
+    }
+    class CodeMinion {
+        Code-focused loop
+        Build/test tools
+        Git workflow
+    }
+    class TestMinion {
+        Test-run-analyze-fix loop
+        Coverage tools
+    }
+    class ResearchMinion {
+        Read-only exploration loop
+        Summarization output
+    }
+    class SummonerMinion {
+        Orchestration loop
+        Spawn/coordinate minions
+    }
+    class Darwin {
+        Evolution loop
+        Evolves modules + itself
+    }
+
+    Minion <|-- CodeMinion
+    Minion <|-- TestMinion
+    Minion <|-- ResearchMinion
+    Minion <|-- SummonerMinion
+    Minion <|-- Darwin
+
+    CodeMinion *-- ReactModule
+    CodeMinion *-- SecurityModule
+    SummonerMinion *-- SprintPlannerModule
+    Darwin *-- ScoringModule
+
+    class ReactModule { }
+    class SecurityModule { }
+    class SprintPlannerModule { }
+    class ScoringModule { }
 ```
 
 Each type inherits the base runtime but overrides what matters: which tools are registered, what the agentic loop looks like, how completion is detected, what evaluation means.
@@ -111,6 +145,22 @@ Modules compose. A minion can load multiple:
 spawn CodeMinion --modules react,security "Fix the XSS vulnerability in the login form"
 ```
 
+```mermaid
+graph TD
+    Source["module.cs<br/><i>C# source file</i>"] --> Roslyn["Roslyn Compiler<br/><i>AST safety gates</i>"]
+    Roslyn -->|"Compile-time<br/>rejection"| Rejected["Rejected<br/><i>Uses forbidden API</i>"]
+    Roslyn -->|"OK"| ALC["AssemblyLoadContext<br/><i>Isolated loading</i>"]
+    ALC --> Module["IMinionModule<br/><i>Running in minion</i>"]
+    Module --> Prompt["ExtendSystemPrompt()"]
+    Module --> Tools["GetTools()"]
+    Module --> Pre["PreProcess()"]
+    Module --> Post["PostProcess()"]
+    Module --> Eval["EvaluateAsync()"]
+
+    style Rejected fill:#fdd,stroke:#a00
+    style Module fill:#dfd,stroke:#0a0
+```
+
 ### Sandboxed Tools as the Security Boundary
 
 Dynamically compiled code is dangerous. The sandbox isn't "modules can't do dangerous things" — it's **"modules can only do dangerous things through supervised channels."**
@@ -140,6 +190,44 @@ Invariants enforced at the tool level, not the module level:
 Roslyn compile-time gate: modules can only reference module SDK types (`IMinionTool`, `ToolResult`, `JsonObject`, basic collections). Direct use of `System.Diagnostics.Process`, `System.IO.File`, `System.Net`, or `System.Reflection.Emit` is rejected at compilation.
 
 The module decides **what** to do. The host decides **how** it's allowed to happen.
+
+```mermaid
+graph TB
+    subgraph Module["Dynamic Module (sandboxed)"]
+        Logic["Module Logic<br/><i>Decides what to do</i>"]
+    end
+
+    subgraph Host["Minion Host (enforces rules)"]
+        FR["FileReadTool<br/><i>scoped to workdir</i>"]
+        FW["FileWriteTool<br/><i>scoped to workdir</i>"]
+        FE["FileEditTool<br/><i>scoped to workdir</i>"]
+        SH["ShellExecuteTool<br/><i>timeout + process tree</i>"]
+        GI["GitTool<br/><i>sandbox repos only</i>"]
+        GR["GrepTool"]
+        GL["GlobTool"]
+    end
+
+    subgraph Blocked["Blocked at compile time"]
+        direction LR
+        P["System.Diagnostics.Process"]
+        F["System.IO.File"]
+        N["System.Net.*"]
+        R["System.Reflection.Emit"]
+    end
+
+    Logic --> FR
+    Logic --> FW
+    Logic --> FE
+    Logic --> SH
+    Logic --> GI
+    Logic --> GR
+    Logic --> GL
+    Logic -.->|"rejected"| Blocked
+
+    style Module fill:#ffe,stroke:#aa0
+    style Host fill:#dfd,stroke:#0a0
+    style Blocked fill:#fdd,stroke:#a00
+```
 
 ### Isolation Progression
 
@@ -262,6 +350,23 @@ Darwin's own modules have tests too. But there's a risk: Darwin could weaken its
 | **Modules** | Darwin | Darwin | The actual runtime extensions |
 
 Core tenants gate everything. Module tests gate the module. Darwin evolves the bottom two layers but can never touch the top.
+
+```mermaid
+graph TB
+    subgraph Humans["Humans Only"]
+        CT["Core Tenants<br/><i>Safety invariants, sandbox rules,<br/>mandatory benchmark gates</i>"]
+    end
+
+    subgraph Darwin_Owned["Darwin Can Evolve"]
+        Tests["Module Tests<br/><i>Validate behavior,<br/>catch regressions</i>"]
+        Modules["Modules<br/><i>Runtime extensions</i>"]
+    end
+
+    CT -->|"gates"| Tests -->|"gates"| Modules
+
+    style Humans fill:#fdd,stroke:#a00
+    style Darwin_Owned fill:#dfd,stroke:#0a0
+```
 
 ## The SummonerMinion
 
@@ -389,6 +494,39 @@ Steps 3-6 are fully automated. Darwin can iterate dozens of times in minutes. No
 
 The fast loop is cheap validation. The slow loop is expensive truth. Both are needed — the fast loop prevents obviously bad changes from wasting real-world cycles, and the slow loop catches subtle issues that only show up in practice.
 
+```mermaid
+graph TD
+    subgraph Fast["Fast Loop (minutes, automated)"]
+        direction TB
+        F1["Read evaluation history"] --> F2["Write improved module.cs + tests.cs"]
+        F2 --> F3{"Compile<br/>(Roslyn)"}
+        F3 -->|"fail"| F2
+        F3 -->|"pass"| F4{"Module<br/>tests"}
+        F4 -->|"fail"| F2
+        F4 -->|"pass"| F5{"Benchmarks<br/>vs baseline"}
+        F5 -->|"regressed"| F2
+        F5 -->|"pass"| F6{"Regression<br/>suite"}
+        F6 -->|"regressed"| F2
+        F6 -->|"pass"| F7["Commit to branch<br/><i>modules/name/v2</i>"]
+    end
+
+    subgraph Slow["Slow Loop (days, real-world)"]
+        direction TB
+        S1["SummonerMinion assigns task"] --> S2["CodeMinion runs with modules"]
+        S2 --> S3["Self-evaluate → TaskOutcome"]
+        S3 --> S4["Store evaluation"]
+        S4 -->|"scores drop"| S5["SummonerMinion spawns Darwin"]
+        S5 --> Fast
+        F7 -->|"v2 ready"| S6["Next task uses v2 module"]
+        S6 --> S7{"v2 scores<br/>better?"}
+        S7 -->|"yes"| S8["v2 becomes default"]
+        S7 -->|"no"| S9["Fall back to v1"]
+    end
+
+    style Fast fill:#efe,stroke:#0a0
+    style Slow fill:#eef,stroke:#00a
+```
+
 ### How This Maps to Hyperagents
 
 | Hyperagent Concept | Minion Equivalent |
@@ -461,6 +599,31 @@ The human picks their comfort level. Early on, review gate for Darwin. As trust 
 When a human corrects a CodeMinion mid-task, that's a signal Darwin can learn from. When a human overrides a SummonerMinion's task breakdown, that's a signal too. When a human approves or rejects a Darwin proposal, that directly feeds the evaluation loop.
 
 Every `@` message, every approval, every rejection, every time the human redoes a minion's work — it all flows into `TaskOutcome` and shapes future evolution. The human doesn't need to explicitly rate things (though they can). Their actions are the rating.
+
+```mermaid
+graph LR
+    Human["Human"]
+
+    Human -->|"@CodeMinion-1"| CM["CodeMinion-1"]
+    Human -->|"@Summoner"| SM["SummonerMinion"]
+    Human -->|"@Darwin"| DW["Darwin"]
+    Human -->|"@TestMinion-1"| TM["TestMinion-1"]
+
+    CM -->|"TaskOutcome"| Eval["Evaluation<br/>History"]
+    SM -->|"TaskOutcome"| Eval
+    TM -->|"TaskOutcome"| Eval
+    DW -->|reads| Eval
+    DW -->|"improved modules"| CM
+    DW -->|"improved modules"| SM
+    DW -->|"improved modules"| TM
+    DW -->|"evolves self"| DW
+
+    Human -->|"approves/rejects<br/>edits output<br/>reverts commits"| Eval
+
+    style Human fill:#ffd,stroke:#aa0
+    style DW fill:#fdf,stroke:#a0a
+    style Eval fill:#ddf,stroke:#00a
+```
 
 ## Open Questions
 
