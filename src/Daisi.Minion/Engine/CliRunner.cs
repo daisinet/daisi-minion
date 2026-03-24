@@ -1,5 +1,6 @@
 using System.Text;
 using Daisi.Minion.Config;
+using Daisi.Minion.Types;
 using Daisi.Llogos.Chat;
 using Daisi.Llogos.Inference;
 
@@ -32,7 +33,8 @@ public sealed class CliRunner : MinionBase
     private string? _roleArg;
     private bool _jsonOutput;
 
-    public CliRunner(ConfigManager configManager) : base(configManager) { }
+    public CliRunner(ConfigManager configManager, MinionTypeConfig? typeConfig = null)
+        : base(configManager, typeConfig) { }
 
     public void ParseArgs(string[] args)
     {

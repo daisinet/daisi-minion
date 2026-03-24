@@ -3,6 +3,7 @@ using Daisi.Minion.Coding;
 using Daisi.Minion.Coding.Tools;
 using Daisi.Minion.Config;
 using Daisi.Minion.Modules;
+using Daisi.Minion.Types;
 using Daisi.Llogos.Chat;
 using Daisi.Llogos.Inference;
 
@@ -30,10 +31,16 @@ public abstract class MinionBase : IDisposable
 
     protected readonly ToolSandbox Sandbox;
     protected readonly ModuleRegistry ModuleRegistry = new();
+    protected readonly MinionTypeConfig? TypeConfig;
 
-    protected MinionBase(ConfigManager configManager)
+    protected MinionBase(ConfigManager configManager, MinionTypeConfig? typeConfig = null)
     {
         ConfigManager = configManager;
+        TypeConfig = typeConfig;
+
+        // Apply type's default role if no role is configured
+        if (typeConfig != null && string.IsNullOrEmpty(configManager.Config.ActiveRole))
+            configManager.Config.ActiveRole = typeConfig.DefaultRole;
 
         var workDir = configManager.Config.WorkingDirectory;
         if (string.IsNullOrEmpty(workDir) || !Directory.Exists(workDir))
@@ -47,17 +54,36 @@ public abstract class MinionBase : IDisposable
     }
 
     /// <summary>
-    /// Register the 7 base tools with sandbox scoping and seal them so modules cannot replace them.
+    /// Register base tools with sandbox scoping, respecting type's allowed tools filter,
+    /// then seal them so modules cannot replace them.
     /// </summary>
     private void RegisterBaseTools()
     {
-        ToolRegistry.Register(new FileReadTool(Sandbox));
-        ToolRegistry.Register(new FileWriteTool(Sandbox));
-        ToolRegistry.Register(new FileEditTool(Sandbox));
-        ToolRegistry.Register(new GrepTool(Sandbox));
-        ToolRegistry.Register(new GlobTool(Sandbox));
-        ToolRegistry.Register(new ShellExecuteTool(Sandbox));
-        ToolRegistry.Register(new GitTool(Sandbox));
+        var allowed = TypeConfig?.AllowedTools;
+        IMinionTool[] allTools =
+        [
+            new FileReadTool(Sandbox),
+            new FileWriteTool(Sandbox),
+            new FileEditTool(Sandbox),
+            new GrepTool(Sandbox),
+            new GlobTool(Sandbox),
+            new ShellExecuteTool(Sandbox),
+            new GitTool(Sandbox),
+        ];
+
+        foreach (var tool in allTools)
+        {
+            if (allowed == null || allowed.Contains(tool.Name))
+                ToolRegistry.Register(tool);
+        }
+
+        // Register type-specific additional tools
+        if (TypeConfig?.AdditionalToolsFactory != null)
+        {
+            foreach (var tool in TypeConfig.AdditionalToolsFactory(Sandbox))
+                ToolRegistry.Register(tool);
+        }
+
         ToolRegistry.SealBaseTools();
     }
 
@@ -125,6 +151,13 @@ public abstract class MinionBase : IDisposable
         }
 
         sb.Append(ProjectContext.ToSystemPromptSection());
+
+        // Append type-specific instructions
+        if (!string.IsNullOrEmpty(TypeConfig?.SystemPromptExtension))
+        {
+            sb.AppendLine();
+            sb.AppendLine(TypeConfig.SystemPromptExtension);
+        }
 
         // Append module prompt extensions
         return ModuleRegistry.ExtendSystemPrompt(sb.ToString());
