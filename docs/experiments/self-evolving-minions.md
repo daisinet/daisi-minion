@@ -149,6 +149,84 @@ The module decides **what** to do. The host decides **how** it's allowed to happ
 | **Summoner-generated** | + process isolation (restricted Windows token, named pipe comms) | LLM wrote it |
 | **Marketplace** | + WASM sandbox (Wasmtime, capability-based) | Strangers wrote it |
 
+## Core Tenants
+
+Immutable rules that apply to every minion type, every module, every iteration. Hardcoded in the base `Minion` class. No evolution can touch them.
+
+### Safety Invariants
+
+- Must compile (Roslyn) before it can run
+- Must not modify files outside the sandbox working directory
+- Must not exceed the iteration budget
+- Must not produce empty output
+- Must always self-evaluate (cannot skip evaluation)
+- Must not disable or weaken core tenant checks
+
+### Performance Benchmarks
+
+Measurable baselines that Darwin can run before and after every change. These are automated, fast, and require no human input:
+
+| Benchmark | Measures | Better = |
+|-----------|----------|----------|
+| Tokens per task | How much output to accomplish a goal | Lower |
+| Iterations to completion | How many agentic loop cycles | Lower |
+| Tool calls per task | How much thrashing / unnecessary work | Lower |
+| Time to first tool call | How quickly the minion starts acting vs overthinking | Lower |
+| Context utilization at completion | How much context window was consumed | Lower |
+| Module compilation time | Roslyn overhead | Lower |
+| Module test pass rate | Does the module's own test suite pass | Higher |
+| Regression suite pass rate | Does it still pass known-good cases | Higher |
+
+Darwin runs these automatically. A module that regresses on any benchmark doesn't ship.
+
+### Module Test Suite
+
+Each module has co-located unit tests that evolve alongside it:
+
+```
+~/.daisi-minion/modules/
+  react-reviewer/
+    module.cs           ← the module source
+    tests.cs            ← tests for this module (also compiled via Roslyn)
+    evaluation.json     ← score history across real-world tasks
+```
+
+Tests are actual C# compiled via the same Roslyn pipeline, same sandbox:
+
+```csharp
+public class ReactReviewerTests : MinionModuleTests
+{
+    [TestCase("missing-key")]
+    public async Task DetectsReactMissingKey()
+    {
+        // Given a React component with a list missing key props
+        var input = LoadFixture("missing-key.tsx");
+
+        // When the module reviews it
+        var result = await RunModule(input, goal: "Review this component");
+
+        // Then the output mentions missing keys
+        Assert.That(result.Output, Contains("key"));
+        Assert.That(result.Objective.CompileSuccess, Is.True);
+        Assert.That(result.Benchmark.IterationsUsed, Is.LessThan(3));
+    }
+}
+```
+
+Darwin writes both module and tests. When it improves a module, it also updates the tests. When it writes a new module from scratch, it can write the tests first (TDD for minions).
+
+Darwin's own modules have tests too. But there's a risk: Darwin could weaken its own tests to inflate scores. Core tenants are the immutable floor that prevents this.
+
+### Trust Hierarchy
+
+| Layer | Who writes it | Who can change it | Purpose |
+|-------|--------------|-------------------|---------|
+| **Core tenants** | Humans | Humans only | Safety invariants, benchmark definitions, sandbox rules |
+| **Module tests** | Darwin | Darwin | Validate module behavior, catch regressions |
+| **Modules** | Darwin | Darwin | The actual runtime extensions |
+
+Core tenants gate everything. Module tests gate the module. Darwin evolves the bottom two layers but can never touch the top.
+
 ## The SummonerMinion
 
 The summoner is just another minion type — not a special privileged process. It inherits the same base runtime but its loop is orchestration, not coding.
@@ -234,32 +312,46 @@ The scoring formula itself starts hardcoded (simple weighted average) but is eve
 
 ### The Cycle
 
+Two loops — one fast (automated, minutes), one slow (real-world, days).
+
+**Fast loop** (Darwin iterates alone, no humans, no real tasks):
+
+```
+1. Read evaluation history, identify weakness in a module
+2. Write improved module.cs + tests.cs
+3. Compile both (Roslyn) → fail? go to 2
+4. Run module tests → fail? go to 2
+5. Run performance benchmarks against baseline → regressed? go to 2
+6. Run regression suite (known-good tasks) → regressed? go to 2
+7. Commit to branch: modules/react-reviewer/v2
+```
+
+Steps 3-6 are fully automated. Darwin can iterate dozens of times in minutes. No humans, no real tasks, no expensive inference — just compilation, test execution, and benchmarks.
+
+**Slow loop** (real-world validation):
+
 ```
 1. SummonerMinion assigns task → CodeMinion + modules
 2. CodeMinion runs, completes task
 3. CodeMinion self-evaluates → TaskOutcome
 4. Outcome stored alongside module version
 
-    ... after N tasks ...
+    ... after N tasks with weak scores ...
 
 5. SummonerMinion spawns Darwin:
    "The react-reviewer module scored 0.3 on the last 5 tasks.
     Here are the evaluation notes. Write an improved version."
 
-6. Darwin:
-   a. Reads current module source
-   b. Reads evaluation history (patterns, not just last run)
-   c. Writes improved .cs file
-   d. Compiles it (Roslyn) — if it fails, iterates
-   e. Commits to a git branch: modules/react-reviewer/v2
-   f. Optionally runs a test task to validate
+6. Darwin runs the fast loop (above), produces v2
 
 7. Next time SummonerMinion needs react review:
-   - Sees v2 branch exists with passing tests
-   - Spawns CodeMinion with the v2 module
+   - Sees v2 branch exists, passed fast loop
+   - Spawns CodeMinion with v2 module on a real task
    - If v2 scores better over time, it becomes the default
    - If worse, SummonerMinion falls back to v1
 ```
+
+The fast loop is cheap validation. The slow loop is expensive truth. Both are needed — the fast loop prevents obviously bad changes from wasting real-world cycles, and the slow loop catches subtle issues that only show up in practice.
 
 ### How This Maps to Hyperagents
 
