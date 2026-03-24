@@ -126,12 +126,6 @@ public sealed class MinionEngine : IDisposable
                 if (input.Equals("/exit", StringComparison.OrdinalIgnoreCase))
                     break;
 
-                if (input.Equals("/clear", StringComparison.OrdinalIgnoreCase))
-                {
-                    _layout?.ClearContent();
-                    continue;
-                }
-
                 if (!await _commands.ExecuteAsync(input, _cts.Token))
                     _renderer.WriteError($"Unknown command: {input}. Type /help for available commands.");
                 _renderer.WriteLine();
@@ -956,7 +950,7 @@ public sealed class MinionEngine : IDisposable
     private void RegisterCommands()
     {
         _commands.Register("help", new HelpCommandHandler(_renderer));
-        _commands.Register("clear", new ClearCommandHandler(_conversation!, _renderer));
+        _commands.Register("clear", new ClearCommandHandler(_conversation!, _renderer, _layout, _activeContextSize));
         _commands.Register("compact", new CompactCommandHandler(_conversation!, _renderer, GetGenerationParams));
         _commands.Register("model", new ModelCommandHandler(_renderer, _configManager, ReloadModel));
         _commands.Register("role", new RoleCommandHandler(_renderer, _roles, _configManager, () =>

@@ -40,6 +40,11 @@ public sealed class FileEditTool : IMinionTool
 
         var content = await File.ReadAllTextAsync(path, ct);
 
+        // Normalize line endings — model produces \n but files may have \r\n
+        content = content.Replace("\r\n", "\n");
+        oldStr = oldStr.Replace("\r\n", "\n");
+        newStr = newStr.Replace("\r\n", "\n");
+
         if (!content.Contains(oldStr, StringComparison.Ordinal))
             return ToolResult.Error("old_string not found in file");
 

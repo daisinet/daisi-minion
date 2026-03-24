@@ -106,11 +106,24 @@ public sealed class StatusBar
 
         if (gap < 0)
         {
+            // Priority: right (model name) > middle (context bar) > left (spinner)
+            // First try clipping the left
             var maxLeft = width - middleVisible.Length - right.Length - 1;
-            if (maxLeft > 3)
+            if (maxLeft > 10)
+            {
                 left = left[..maxLeft];
+            }
             else
+            {
+                // Drop the context bar to make room
                 middle = "";
+                middleVisible = "";
+                maxLeft = width - right.Length - 1;
+                if (maxLeft > 3)
+                    left = left[..maxLeft];
+                else
+                    left = " ";
+            }
             gap = width - left.Length - StripAnsi(middle).Length - right.Length;
         }
 
