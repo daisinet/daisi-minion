@@ -166,18 +166,53 @@ Immutable rules that apply to every minion type, every module, every iteration. 
 
 Measurable baselines that Darwin can run before and after every change. These are automated, fast, and require no human input:
 
-| Benchmark | Measures | Better = |
-|-----------|----------|----------|
-| Tokens per task | How much output to accomplish a goal | Lower |
-| Iterations to completion | How many agentic loop cycles | Lower |
-| Tool calls per task | How much thrashing / unnecessary work | Lower |
-| Time to first tool call | How quickly the minion starts acting vs overthinking | Lower |
-| Context utilization at completion | How much context window was consumed | Lower |
-| Module compilation time | Roslyn overhead | Lower |
-| Module test pass rate | Does the module's own test suite pass | Higher |
-| Regression suite pass rate | Does it still pass known-good cases | Higher |
+| Benchmark | Measures |
+|-----------|----------|
+| Tokens per task | How much output to accomplish a goal |
+| Iterations to completion | How many agentic loop cycles |
+| Tool calls per task | Tool usage (thrashing vs thoroughness) |
+| Time to first tool call | How quickly the minion starts acting vs overthinking |
+| Context utilization at completion | How much context window was consumed |
+| Module compilation time | Roslyn overhead |
+| Module test pass rate | Does the module's own test suite pass |
+| Regression suite pass rate | Does it still pass known-good cases |
 
-Darwin runs these automatically. A module that regresses on any benchmark doesn't ship.
+### Weighted Scoring
+
+Benchmarks can't be evaluated in isolation — they're interdependent and context-dependent. Fewer tool calls is usually better, but not if it means more iterations. Faster compilation is nice, but not if the module is trivially simple and useless. A SecurityModule that adds static analysis will always increase compilation time — that's the point.
+
+Each module carries a `BenchmarkProfile` that assigns weights to each benchmark:
+
+```csharp
+public class BenchmarkProfile
+{
+    // Weights (-1.0 to 1.0): negative = lower is better, positive = higher is better
+    public double TokensPerTask { get; set; }             // usually -0.3
+    public double IterationsToCompletion { get; set; }    // usually -0.5
+    public double ToolCallsPerTask { get; set; }          // context-dependent
+    public double TimeToFirstToolCall { get; set; }       // usually -0.2
+    public double ContextUtilization { get; set; }        // usually -0.3
+    public double CompilationTime { get; set; }           // near zero for complex modules
+    public double TestPassRate { get; set; }              // always +1.0 (core tenant)
+    public double RegressionPassRate { get; set; }        // always +1.0 (core tenant)
+}
+```
+
+Weights vary by context:
+
+- **By minion type** — CodeMinion weights compilation success heavily. ResearchMinion doesn't compile anything, so that weight is zero and context utilization matters more.
+- **By task complexity** — A one-file bug fix penalizes high tool call counts. A 20-file refactor expects them.
+- **By module purpose** — A SecurityModule's compilation time weight is near zero because the added analysis pass is the point. Its weight for "caught real vulnerabilities" is high.
+
+The profile lives with the module — Darwin can evolve it too. But core tenant constraints on the profile are immutable:
+
+- `TestPassRate` and `RegressionPassRate` can never be weighted below `+1.0`
+- The weighted score must always be computed (cannot be skipped)
+- Test and regression pass rates are **mandatory gates** regardless of weighted score — a module that fails tests never ships, even if every other benchmark is stellar
+
+This lets Darwin tune the tradeoffs between speed and thoroughness, but never tune away correctness.
+
+Darwin runs benchmarks automatically. A module that regresses on its weighted score doesn't ship.
 
 ### Module Test Suite
 
@@ -188,6 +223,7 @@ Each module has co-located unit tests that evolve alongside it:
   react-reviewer/
     module.cs           ← the module source
     tests.cs            ← tests for this module (also compiled via Roslyn)
+    benchmarks.json     ← BenchmarkProfile (weights, evolved by Darwin)
     evaluation.json     ← score history across real-world tasks
 ```
 
