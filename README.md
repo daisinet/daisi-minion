@@ -2,7 +2,7 @@
 
 A standalone local AI coding assistant that runs GGUF models via the Daisi Llogos inference engine. Minions are autonomous workers — they load a model, chat with it, execute tools, and complete tasks without cloud dependencies.
 
-Minions can run solo (interactive TUI or headless CLI) or be spawned by a **summoner** (the coordinating bot in `daisi-bot-dotnet`) to work as part of a team.
+Minions can run solo (interactive TUI or headless CLI) or be spawned by a summoner to work as part of a team.
 
 ## Architecture
 
@@ -74,7 +74,7 @@ Features:
 
 ### CLI Mode
 
-Headless mode for scripting, CI pipelines, and summoner-spawned workers.
+Headless mode for scripting, CI pipelines, and automated workflows.
 
 ```
 daisi-minion --cli                              Interactive stdin/stdout chat
@@ -150,12 +150,12 @@ Per-model profiles (context size, temperature, top_k, top_p, repetition penalty)
 
 ## Integration with Daisinet
 
-Minions fit into the broader Daisinet ecosystem:
+daisi-minion is a standalone project. It can operate fully independently, but also integrates with the broader Daisinet ecosystem:
 
-- **Summoners** (`daisi-bot-dotnet`) coordinate teams of minions, assigning goals and monitoring progress
-- **ORC** (`daisi-orc-dotnet`) can route inference requests to idle minions via host mode
-- **Marketplace** (`daisi-manager-dotnet`) distributes skills that extend minion behavior via system prompts
-- **DaisiGit** (`daisi-git`) provides per-account git hosting for versioning minion artifacts
+- **ORC** — can route inference requests to idle minions via host mode
+- **Marketplace** — distributes skills that extend minion behavior via system prompts
+- **DaisiGit** — provides per-account git hosting for versioning minion artifacts
+- **Summoners** — external coordinators can spawn minions via CLI mode to work as part of a team
 
 ## Experiments
 
