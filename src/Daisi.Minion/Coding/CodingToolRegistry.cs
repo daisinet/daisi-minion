@@ -8,10 +8,29 @@ namespace Daisi.Minion.Coding;
 public sealed class CodingToolRegistry
 {
     private readonly Dictionary<string, IMinionTool> _tools = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _sealedTools = new(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyDictionary<string, IMinionTool> Tools => _tools;
 
-    public void Register(IMinionTool tool) => _tools[tool.Name] = tool;
+    /// <summary>
+    /// Register a tool. Throws if a sealed tool with the same name already exists.
+    /// </summary>
+    public void Register(IMinionTool tool)
+    {
+        if (_sealedTools.Contains(tool.Name))
+            throw new InvalidOperationException($"Cannot replace sealed base tool: {tool.Name}");
+        _tools[tool.Name] = tool;
+    }
+
+    /// <summary>
+    /// Seal all currently registered tools. Sealed tools cannot be replaced by future Register calls.
+    /// Called after base tools are registered to prevent modules from overriding them.
+    /// </summary>
+    public void SealBaseTools()
+    {
+        foreach (var name in _tools.Keys)
+            _sealedTools.Add(name);
+    }
 
     /// <summary>
     /// Get tool definitions suitable for injection into model prompts.
