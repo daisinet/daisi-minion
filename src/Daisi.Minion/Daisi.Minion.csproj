@@ -9,6 +9,9 @@
     <EmbeddedResource Include="Traits\*.md" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.*" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\..\daisi-llogos\src\dotnet\Daisi.Llogos\Daisi.Llogos.csproj" />
     <ProjectReference Include="..\..\..\daisi-llogos\src\dotnet\Daisi.Llogos.Cpu\Daisi.Llogos.Cpu.csproj" />
     <ProjectReference Include="..\..\..\daisi-llogos\src\dotnet\Daisi.Llogos.Cuda\Daisi.Llogos.Cuda.csproj" />
