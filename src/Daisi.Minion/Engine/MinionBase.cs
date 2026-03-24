@@ -2,6 +2,7 @@ using System.Text;
 using Daisi.Minion.Coding;
 using Daisi.Minion.Coding.Tools;
 using Daisi.Minion.Config;
+using Daisi.Minion.Modules;
 using Daisi.Llogos.Chat;
 using Daisi.Llogos.Inference;
 
@@ -28,6 +29,7 @@ public abstract class MinionBase : IDisposable
     protected int ActiveContextSize;
 
     protected readonly ToolSandbox Sandbox;
+    protected readonly ModuleRegistry ModuleRegistry = new();
 
     protected MinionBase(ConfigManager configManager)
     {
@@ -41,6 +43,7 @@ public abstract class MinionBase : IDisposable
         Sandbox = new ToolSandbox(workDir);
         ProjectContext = new ProjectContext(workDir);
         RegisterBaseTools();
+        LoadModules();
     }
 
     /// <summary>
@@ -59,7 +62,37 @@ public abstract class MinionBase : IDisposable
     }
 
     /// <summary>
-    /// Build the system prompt from role, persona, and project context.
+    /// Discover, compile, and load modules from ~/.daisi-minion/modules/.
+    /// Module tools are registered after base tools are sealed.
+    /// </summary>
+    private void LoadModules()
+    {
+        var loader = new ModuleLoader(log: msg => InferenceLog.Log($"[modules] {msg}"));
+        var modules = loader.LoadAll();
+
+        if (modules.Count == 0) return;
+
+        var context = new MinionModuleContext
+        {
+            WorkingDirectory = Sandbox.Root,
+            Sandbox = Sandbox,
+            MinionName = ConfigManager.Config.MinionName,
+            ActiveRole = ConfigManager.Config.ActiveRole,
+            Log = msg => InferenceLog.Log($"[module] {msg}"),
+        };
+
+        ModuleRegistry.AddRange(modules);
+        ModuleRegistry.InitializeAll(context);
+
+        // Register module-provided tools (after base tools are sealed)
+        foreach (var tool in ModuleRegistry.GetAllTools())
+            ToolRegistry.Register(tool);
+
+        InferenceLog.Log($"Loaded {modules.Count} module(s), {ModuleRegistry.GetAllTools().Count} additional tool(s)");
+    }
+
+    /// <summary>
+    /// Build the system prompt from role, persona, project context, and module extensions.
     /// Subclasses can override to add type-specific instructions.
     /// </summary>
     protected virtual string BuildSystemPrompt()
@@ -92,7 +125,9 @@ public abstract class MinionBase : IDisposable
         }
 
         sb.Append(ProjectContext.ToSystemPromptSection());
-        return sb.ToString();
+
+        // Append module prompt extensions
+        return ModuleRegistry.ExtendSystemPrompt(sb.ToString());
     }
 
     /// <summary>
@@ -135,6 +170,9 @@ public abstract class MinionBase : IDisposable
     {
         var parameters = GetGenerationParams();
 
+        // Module pre-processing
+        userMessage = ModuleRegistry.PreProcess(userMessage);
+
         var fullResponse = await StreamTokensAsync(
             Conversation!.SendAsync(userMessage, parameters, ct), ct);
 
@@ -159,6 +197,9 @@ public abstract class MinionBase : IDisposable
             fullResponse = await StreamTokensAsync(
                 Conversation.ResumeAsync(parameters, ct), ct);
         }
+
+        // Module post-processing
+        fullResponse = ModuleRegistry.PostProcess(fullResponse);
 
         return fullResponse;
     }
