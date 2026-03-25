@@ -3,6 +3,7 @@ using Daisi.Minion.Coding;
 using Daisi.Minion.Coding.Tools;
 using Daisi.Minion.Config;
 using Daisi.Minion.Modules;
+using Daisi.Minion.Orchestration;
 using Daisi.Minion.Types;
 using Daisi.Llogos.Chat;
 using Daisi.Llogos.Inference;
@@ -32,6 +33,7 @@ public abstract class MinionBase : IDisposable
     protected readonly ToolSandbox Sandbox;
     protected readonly ModuleRegistry ModuleRegistry = new();
     protected readonly MinionTypeConfig? TypeConfig;
+    protected MinionPool? Pool;
 
     protected MinionBase(ConfigManager configManager, MinionTypeConfig? typeConfig = null)
     {
@@ -118,6 +120,24 @@ public abstract class MinionBase : IDisposable
     }
 
     /// <summary>
+    /// Initialize the MinionPool and register orchestration tools.
+    /// Called after model loading for summoner-type minions.
+    /// </summary>
+    protected void InitializeOrchestration()
+    {
+        if (TypeConfig?.Name != "summoner" || ModelHandle == null) return;
+
+        Pool = new MinionPool(ModelHandle, ConfigManager, Sandbox);
+        ToolRegistry.Register(new SpawnMinionTool(Pool));
+        ToolRegistry.Register(new CheckMinionTool(Pool));
+        ToolRegistry.Register(new SendMessageTool(Pool));
+        ToolRegistry.Register(new StopMinionTool(Pool));
+        ToolRegistry.Register(new ListMinionsTool(Pool));
+
+        InferenceLog.Log("Orchestration tools registered (summoner mode)");
+    }
+
+    /// <summary>
     /// Build the system prompt from role, persona, project context, and module extensions.
     /// Subclasses can override to add type-specific instructions.
     /// </summary>
@@ -169,6 +189,9 @@ public abstract class MinionBase : IDisposable
     protected void InitializeConversation()
     {
         if (ModelHandle == null) return;
+
+        // Register orchestration tools if this is a summoner type
+        InitializeOrchestration();
 
         var systemPrompt = BuildSystemPrompt();
         var toolDefs = ToolRegistry.GetToolDefinitions();
@@ -343,6 +366,7 @@ public abstract class MinionBase : IDisposable
 
     public virtual void Dispose()
     {
+        Pool?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         Conversation?.Dispose();
         ModelHandle?.Dispose();
         Cts.Dispose();
