@@ -44,6 +44,30 @@ public static class MinionTypeFactory
                 """,
             AllowedTools = ["file_read", "grep", "glob", "git"],
         },
+
+        ["summoner"] = new MinionTypeConfig
+        {
+            Name = "summoner",
+            Description = "Orchestrator minion that spawns and coordinates other minions",
+            DefaultRole = "chat",
+            SystemPromptExtension = """
+                You are a Summoner — a coordinator that manages worker minions.
+                Break complex tasks into subtasks and assign each to a specialized minion.
+
+                Available minion types: code (writing/fixing code), test (writing/running tests), research (read-only exploration).
+
+                Strategy:
+                - Decompose the goal into independent subtasks
+                - Spawn a typed minion for each subtask with a clear, specific task description
+                - Monitor progress with check_minion and list_minions
+                - Send follow-up messages with send_message if a minion needs guidance
+                - Stop minions when they're done to free resources
+                - Prefer 2-3 focused minions over one doing everything
+                """,
+            // Summoner uses orchestration tools instead of file tools.
+            // Base file tools are excluded — the summoner delegates, not codes.
+            AllowedTools = [],
+        },
     };
 
     /// <summary>Get the type config by name. Throws on unknown type.</summary>
