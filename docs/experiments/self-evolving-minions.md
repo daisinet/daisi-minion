@@ -882,3 +882,44 @@ graph TD
 | **5. Benchmarks** | Metrics collection, weighted scoring, persistent evaluation per module | `Benchmarks/` folder |
 | **6. SummonerMinion** | Multi-minion orchestration, shared model, child lifecycle | `Types/SummonerMinion.cs`, `Orchestration/` folder |
 | **7. Darwin** | Fast loop evolution (write → compile → test → benchmark → commit/revert) | `Types/DarwinMinion.cs`, `Evolution/` folder |
+
+## Observed Model Behavior (Qwen3.5-9B-Q4_K_M on RTX 5080)
+
+All 7 phases were tested live on Qwen3.5-9B-Q4_K_M. Key findings:
+
+### What Works Reliably
+
+| Tool | Pattern | Example |
+|------|---------|---------|
+| `file_write` | Short content (< 500 chars) | "Create hello.txt containing 'Hello from a minion!'" |
+| `file_edit` | Short old/new strings (< 100 chars) | "Replace 'WORK IN SPACIOUS' with 'ABOUT SPACIOUS'" |
+| `shell` | Any command complexity | "Run: python fizzbuzz.py", "Run: copy index.html about.html" |
+| `glob` | File discovery | "List all files in the current directory" |
+| `grep` | Pattern search | "Search for 'TODO' in all .cs files" |
+| `file_read` | Full files | "Read about.html" |
+| Tool chaining | read → edit → verify | "Read file, edit title, read again to confirm" |
+| Summoner | spawn → message → check | Summoner spawned CodeMinion, sent task, child created files |
+| Darwin | list → create → compile | Created valid IMinionModule code when interface was in context |
+
+### What Doesn't Work
+
+| Pattern | Why | Workaround |
+|---------|-----|------------|
+| `file_write` with large HTML (> 500 chars) | Model plans but never produces `<tool_call>` | Pass content via shell echo command |
+| `file_edit` with long HTML strings | Model can't reproduce exact multi-line HTML in JSON | Keep old/new strings short, or use shell sed |
+| Complex multi-step goals | Model loops on planning without acting | Break into single-step goals |
+| Generating code from memory | 9B model invents wrong API signatures | Inject full interface template into system prompt |
+
+### Critical Design Patterns for 9B Models
+
+1. **Interface templates in system prompt**: Darwin must have the complete `IMinionModule` interface and a working example in its system prompt. The model copies patterns accurately but can't invent API signatures.
+
+2. **Short, imperative goals**: "Create hello.txt containing 'test'" works. "Create a comprehensive Bootstrap 5 website with navbar, hero section, features, and footer" doesn't — the model plans forever.
+
+3. **Shell for large content**: When the model needs to write multi-line content, pass it as a shell echo command in the goal rather than expecting `file_write` with large arguments.
+
+4. **Copy-then-edit**: For new pages, copy an existing page with shell, then make small targeted edits. Don't ask the model to generate a full page from scratch.
+
+5. **JSON parser hardening**: The model produces malformed JSON (missing opening quotes on keys like `arguments":` instead of `"arguments":`). The `QwenToolCallParser` includes fixups for known malformations.
+
+6. **Think-tag handling**: The model wraps reasoning in `</think>` tags before `<tool_call>`. The parser must handle `</think>\n\n<tool_call>` as a valid sequence.
