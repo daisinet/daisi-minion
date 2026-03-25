@@ -293,13 +293,8 @@ public abstract class MinionBase : IDisposable
         var goalPrompt = $"""
             Your goal: {goal}
 
-            Work toward this goal autonomously. Use your tools to explore, read files, make changes, run commands — whatever is needed.
-
-            After each step, evaluate your progress:
-            - If the goal is NOT yet complete, explain what you'll do next and continue working.
-            - If the goal IS complete, respond with exactly "GOAL_COMPLETE" on its own line, followed by a brief summary of what was accomplished.
-
-            Do not ask the user for input. Make decisions yourself and keep going.
+            Call tools immediately to accomplish this goal. Do not explain what you plan to do — just call the tool.
+            When done, respond with GOAL_COMPLETE and a brief summary.
             """;
 
         for (int iteration = 1; iteration <= maxIterations; iteration++)
@@ -310,7 +305,7 @@ public abstract class MinionBase : IDisposable
 
             var message = iteration == 1
                 ? goalPrompt
-                : "Continue working toward the goal. If complete, respond with GOAL_COMPLETE.";
+                : "You have not completed the goal yet. Call a tool now to make progress. If the goal is complete, respond with GOAL_COMPLETE.";
 
             var fullResponse = await RunAgenticStepAsync(message, ct);
 

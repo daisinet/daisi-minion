@@ -37,7 +37,7 @@ public sealed class FileReadTool : IMinionTool
             return ToolResult.Error($"File not found: {path}");
 
         int offset = ToolArgs.GetInt(arguments, "offset", 1);
-        int limit = ToolArgs.GetInt(arguments, "limit", 2000);
+        int limit = ToolArgs.GetInt(arguments, "limit", 100);
         if (offset < 1) offset = 1;
 
         var lines = await File.ReadAllLinesAsync(path, ct);
@@ -48,8 +48,14 @@ public sealed class FileReadTool : IMinionTool
             sb.AppendLine($"{i + 1,6}\t{lines[i]}");
 
         if (end < lines.Length)
-            sb.AppendLine($"... ({lines.Length - end} more lines)");
+            sb.AppendLine($"... ({lines.Length - end} more lines, use offset={end + 1} to continue)");
 
-        return ToolResult.Success(sb.ToString());
+        // Hard cap to prevent context flooding
+        const int maxChars = 4000;
+        var output = sb.ToString();
+        if (output.Length > maxChars)
+            output = output[..maxChars] + $"\n... (output truncated at {maxChars} chars, use offset/limit for specific sections)";
+
+        return ToolResult.Success(output);
     }
 }
