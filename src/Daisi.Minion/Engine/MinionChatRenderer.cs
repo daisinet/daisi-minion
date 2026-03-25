@@ -20,51 +20,48 @@ public sealed class MinionChatRenderer : IChatRenderer
         _tools = tools;
     }
 
-    public string[] GetStopSequences() => ["<|im_end|>"];
+    public string[] GetStopSequences() => ["<|im_end|>", "</tool_call>"];
 
     public string Render(IReadOnlyList<ChatMessage> messages, bool addGenerationPrompt = true)
     {
         var sb = new StringBuilder();
 
         // --- System message with tools ---
+        bool hasSystemMessage = messages.Count > 0 && messages[0].Role == "system";
+        string? systemContent = hasSystemMessage ? messages[0].Content : null;
+
         if (_tools.Count > 0)
         {
             sb.Append("<|im_start|>system\n");
 
-            string? systemContent = null;
-            if (messages.Count > 0 && messages[0].Role == "system")
-                systemContent = messages[0].Content;
+            // System content before tools
+            if (systemContent != null)
+                sb.Append(systemContent).Append('\n');
 
-            // Tools in JSON format — matches the model's native training
-            sb.Append("# Tools\n\nYou have access to the following functions:\n\n");
-            foreach (var tool in _tools)
-            {
-                sb.Append("- `").Append(tool.Name).Append("`: ").Append(tool.Description).Append('\n');
-            }
-            sb.Append("\nTo call a function, respond with a JSON object inside <tool_call> tags:\n\n");
-            sb.Append("<tool_call>\n{\"name\": \"function_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n\n");
-            sb.Append("When asked to create, edit, or build something, respond with a tool call immediately.\n");
-            sb.Append("Do not describe what you plan to do — call the tool.\n\n");
-            sb.Append("Available function signatures:\n");
+            // Tools block
+            sb.Append("\n<tools>\n");
             foreach (var tool in _tools)
             {
                 sb.Append(JsonSerializer.Serialize(new
                 {
                     type = "function",
-                    function = new { name = tool.Name, parameters = tool.ParametersSchema }
+                    function = new { name = tool.Name, description = tool.Description, parameters = tool.ParametersSchema }
                 }, JsonOpts));
                 sb.Append('\n');
             }
+            sb.Append("</tools>\n\n");
 
-            if (systemContent != null)
-                sb.Append('\n').Append(systemContent);
+            sb.Append("To call a function, respond with a JSON object inside <tool_call> tags:\n\n");
+            sb.Append("<tool_call>\n{\"name\": \"function_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n\n");
+            sb.Append("When asked to create, edit, or build something, respond with a tool_call immediately.\n");
+            sb.Append("Do not describe what you plan to do — call the tool.\n");
 
             sb.Append("<|im_end|>\n");
         }
         else
         {
-            if (messages.Count > 0 && messages[0].Role == "system")
-                sb.Append("<|im_start|>system\n").Append(messages[0].Content).Append("<|im_end|>\n");
+            if (hasSystemMessage)
+                sb.Append("<|im_start|>system\n").Append(systemContent).Append("<|im_end|>\n");
         }
 
         // --- Conversation messages ---
@@ -99,7 +96,7 @@ public sealed class MinionChatRenderer : IChatRenderer
         {
             if (messages.Count == 0 || messages[^1].Role != "assistant")
             {
-                sb.Append("<|im_start|>assistant\n");
+                sb.Append("<|im_start|>assistant\n<think>\n");
             }
         }
 
@@ -109,19 +106,6 @@ public sealed class MinionChatRenderer : IChatRenderer
     private static void RenderAssistantMessage(StringBuilder sb, ChatMessage msg)
     {
         var content = msg.Content ?? "";
-
-        // Strip thinking blocks from history
-        if (content.Contains("</think>"))
-        {
-            var thinkEnd = content.IndexOf("</think>", StringComparison.Ordinal);
-            content = content[(thinkEnd + 8)..].TrimStart();
-        }
-        else if (content.TrimStart().StartsWith("<think>"))
-        {
-            var idx = content.IndexOf("<think>", StringComparison.Ordinal);
-            content = content[(idx + 7)..].TrimStart();
-        }
-
         sb.Append("<|im_start|>assistant\n").Append(content).Append("<|im_end|>\n");
     }
 

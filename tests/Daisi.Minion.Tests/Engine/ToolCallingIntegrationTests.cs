@@ -52,7 +52,7 @@ public class ToolCallingIntegrationTests : IAsyncLifetime
         return ValueTask.CompletedTask;
     }
 
-    private void Skip() { if (!_canRun) Assert.Fail("Model not available"); }
+    private void Skip() { if (!_canRun) Assert.Skip("Model not available at " + TestModelPath); }
 
     /// <summary>
     /// Send a prompt and collect the full raw response from the model.
