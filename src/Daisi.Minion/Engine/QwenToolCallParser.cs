@@ -83,7 +83,54 @@ public static partial class QwenToolCallParser
 
     private static ToolCall? TryParseJson(string json)
     {
-        // Delegate to the llogos JSON parser for backward compatibility
+        // Strip leading/trailing whitespace and any trailing incomplete tags
+        json = json.Trim();
+        if (json.Length == 0) return null;
+
+        // Find the JSON object boundaries
+        var start = json.IndexOf('{');
+        var end = json.LastIndexOf('}');
+        if (start < 0 || end <= start) return null;
+
+        var jsonStr = json[start..(end + 1)];
+
+        // Fix common Qwen malformations
+        jsonStr = FixMalformedJson(jsonStr);
+
+        // Try direct JSON parsing
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(jsonStr);
+            var root = doc.RootElement;
+
+            string? name = null;
+            var args = new JsonObject();
+
+            if (root.TryGetProperty("name", out var nameProp))
+                name = nameProp.GetString();
+
+            if (root.TryGetProperty("arguments", out var argsProp) &&
+                argsProp.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                foreach (var prop in argsProp.EnumerateObject())
+                {
+                    args[prop.Name] = prop.Value.ValueKind switch
+                    {
+                        System.Text.Json.JsonValueKind.String => JsonValue.Create(prop.Value.GetString()),
+                        System.Text.Json.JsonValueKind.Number => JsonValue.Create(prop.Value.GetInt32()),
+                        System.Text.Json.JsonValueKind.True => JsonValue.Create(true),
+                        System.Text.Json.JsonValueKind.False => JsonValue.Create(false),
+                        _ => JsonNode.Parse(prop.Value.GetRawText()),
+                    };
+                }
+            }
+
+            if (name != null)
+                return new ToolCall(name, args);
+        }
+        catch { }
+
+        // Fallback to llogos parser
         try
         {
             var calls = Daisi.Llogos.Chat.ToolCallParser.Parse($"<tool_call>{json}</tool_call>");
@@ -91,6 +138,34 @@ public static partial class QwenToolCallParser
         }
         catch { return null; }
     }
+
+    /// <summary>
+    /// Fix common JSON malformations from the Qwen 3.5 model:
+    /// - Missing opening quote on keys: arguments": → "arguments":
+    /// - Trailing commas before closing braces
+    /// </summary>
+    private static string FixMalformedJson(string json)
+    {
+        // Fix specific known malformations from Qwen 3.5:
+        // The model sometimes drops the opening " on JSON keys, producing:
+        //   {"name": "file_edit", arguments": {"path": "..."}}
+        //                         ^ missing opening quote
+        // Fix by finding , or { followed by a space and an unquoted key
+        json = UnquotedKeyRegex().Replace(json, "$1\"$2\":");
+
+        // Fix: trailing commas before }
+        json = TrailingCommaRegex().Replace(json, "}");
+
+        return json;
+    }
+
+    // Match: comma or brace, optional whitespace, unquoted word, optional ", colon
+    // Captures: the separator ($1) and the key ($2)
+    [GeneratedRegex(@"([,{])\s*(\w+)""?\s*:", RegexOptions.None)]
+    private static partial Regex UnquotedKeyRegex();
+
+    [GeneratedRegex(@",\s*\}", RegexOptions.None)]
+    private static partial Regex TrailingCommaRegex();
 
     [GeneratedRegex(@"<tool_call>\s*(.*?)\s*</tool_call>", RegexOptions.Singleline)]
     private static partial Regex ToolCallBlockRegex();
