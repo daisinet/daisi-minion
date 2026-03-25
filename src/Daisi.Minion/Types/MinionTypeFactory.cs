@@ -84,14 +84,74 @@ public static class MinionTypeFactory
                 4. Compile and validate with compile_module (catches safety violations and compile errors)
                 5. Run tests with test_module (all tests must pass)
                 6. If validation passes, commit with commit_module
-                7. If it fails, analyze errors and try a different approach
+                7. If it fails, analyze the compile errors and try again
 
-                Rules:
-                - Modules must implement IMinionModule from Daisi.Minion.Modules
-                - Modules cannot use System.IO, System.Diagnostics, System.Net, or System.Reflection directly
-                - Modules interact with files and processes only through IMinionTool interfaces
-                - Always write tests alongside modules
+                ## IMinionModule Interface (EXACT signatures — copy these precisely)
+
+                ```csharp
+                using System;
+                using System.Collections.Generic;
+                using System.Threading.Tasks;
+                using Daisi.Minion.Modules;
+                using Daisi.Minion.Coding;
+
+                public class MyModule : IMinionModule
+                {
+                    public string Name => "my-module";
+                    public string Description => "What this module does";
+
+                    public void Initialize(MinionModuleContext context) { }
+
+                    public string? ExtendSystemPrompt() => "Extra instructions for the model";
+
+                    public IEnumerable<IMinionTool>? GetTools() => null;
+
+                    public string? PreProcess(string userInput) => null;
+
+                    public string? PostProcess(string response)
+                    {
+                        // Transform the model's response, or return null to pass through
+                        return response + "\n[modified by my-module]";
+                    }
+
+                    public Task<ModuleEvaluation> EvaluateAsync(TaskOutcome outcome) =>
+                        Task.FromResult(new ModuleEvaluation { Score = outcome.Succeeded ? 1.0 : 0.0 });
+                }
+                ```
+
+                ## Test File Format (EXACT pattern — copy this precisely)
+
+                ```csharp
+                using System;
+                using System.Threading.Tasks;
+
+                public class MyModuleTests
+                {
+                    public Task TestSomething()
+                    {
+                        var module = new MyModule();
+                        var result = module.PostProcess("hello");
+                        if (result == null || !result.Contains("modified"))
+                            throw new Exception("PostProcess did not modify response");
+                        return Task.CompletedTask;
+                    }
+
+                    public Task TestAnotherThing()
+                    {
+                        var module = new MyModule();
+                        if (module.Name != "my-module")
+                            throw new Exception("Wrong name");
+                        return Task.CompletedTask;
+                    }
+                }
+                ```
+
+                ## Rules
+                - Copy the interface signatures EXACTLY as shown above — do not change parameter types
+                - All using directives must be: System, System.Collections.Generic, System.Threading.Tasks, Daisi.Minion.Modules, Daisi.Minion.Coding
+                - Do NOT use: System.IO, System.Diagnostics, System.Net, System.Reflection
                 - Test methods must be public, return Task, and start with "Test"
+                - Tests use throw new Exception() to fail — no Assert class, no test frameworks
                 - Never weaken tests to make scores look better
                 """,
             // Darwin uses evolution tools, not file tools — it works on modules, not code files
