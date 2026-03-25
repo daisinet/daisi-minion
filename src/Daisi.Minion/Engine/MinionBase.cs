@@ -4,6 +4,7 @@ using Daisi.Minion.Coding.Tools;
 using Daisi.Minion.Config;
 using Daisi.Minion.Modules;
 using Daisi.Minion.Orchestration;
+using Daisi.Minion.Evolution;
 using Daisi.Minion.Types;
 using Daisi.Llogos.Chat;
 using Daisi.Llogos.Inference;
@@ -138,6 +139,27 @@ public abstract class MinionBase : IDisposable
     }
 
     /// <summary>
+    /// Initialize Darwin evolution tools.
+    /// Called after model loading for darwin-type minions.
+    /// </summary>
+    protected void InitializeEvolution()
+    {
+        if (TypeConfig?.Name != "darwin") return;
+
+        var evolutionConfig = new EvolutionConfig();
+        var evolver = new ModuleEvolver(evolutionConfig);
+
+        ToolRegistry.Register(new CreateModuleTool(evolver));
+        ToolRegistry.Register(new CompileModuleTool(evolver));
+        ToolRegistry.Register(new TestModuleTool());
+        ToolRegistry.Register(new ReadModuleTool(evolver));
+        ToolRegistry.Register(new CommitModuleTool(evolver));
+        ToolRegistry.Register(new ListModulesTool(evolver));
+
+        InferenceLog.Log("Evolution tools registered (darwin mode)");
+    }
+
+    /// <summary>
     /// Build the system prompt from role, persona, project context, and module extensions.
     /// Subclasses can override to add type-specific instructions.
     /// </summary>
@@ -190,8 +212,9 @@ public abstract class MinionBase : IDisposable
     {
         if (ModelHandle == null) return;
 
-        // Register orchestration tools if this is a summoner type
+        // Register type-specific tools
         InitializeOrchestration();
+        InitializeEvolution();
 
         var systemPrompt = BuildSystemPrompt();
         var toolDefs = ToolRegistry.GetToolDefinitions();

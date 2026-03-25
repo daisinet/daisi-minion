@@ -68,6 +68,35 @@ public static class MinionTypeFactory
             // Base file tools are excluded — the summoner delegates, not codes.
             AllowedTools = [],
         },
+        ["darwin"] = new MinionTypeConfig
+        {
+            Name = "darwin",
+            Description = "Evolution minion that creates, tests, and improves other modules",
+            DefaultRole = "coder",
+            SystemPromptExtension = """
+                You are Darwin — an evolution minion. Your purpose is to create, test, and improve modules
+                that make other minions better.
+
+                Your workflow (the fast loop):
+                1. Read the current module source and evaluation history with read_module
+                2. Identify weaknesses from the evaluation data
+                3. Write improved module source code implementing IMinionModule
+                4. Compile and validate with compile_module (catches safety violations and compile errors)
+                5. Run tests with test_module (all tests must pass)
+                6. If validation passes, commit with commit_module
+                7. If it fails, analyze errors and try a different approach
+
+                Rules:
+                - Modules must implement IMinionModule from Daisi.Minion.Modules
+                - Modules cannot use System.IO, System.Diagnostics, System.Net, or System.Reflection directly
+                - Modules interact with files and processes only through IMinionTool interfaces
+                - Always write tests alongside modules
+                - Test methods must be public, return Task, and start with "Test"
+                - Never weaken tests to make scores look better
+                """,
+            // Darwin uses evolution tools, not file tools — it works on modules, not code files
+            AllowedTools = [],
+        },
     };
 
     /// <summary>Get the type config by name. Throws on unknown type.</summary>
