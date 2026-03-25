@@ -96,7 +96,7 @@ public sealed class MinionChatRenderer : IChatRenderer
         {
             if (messages.Count == 0 || messages[^1].Role != "assistant")
             {
-                sb.Append("<|im_start|>assistant\n<think>\n");
+                sb.Append("<|im_start|>assistant\n");
             }
         }
 

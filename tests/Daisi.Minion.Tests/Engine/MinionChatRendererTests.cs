@@ -135,7 +135,7 @@ public class MinionChatRendererTests
     // ── Thinking support ──
 
     [Fact]
-    public void Render_GenerationPrompt_IncludesThinkTag()
+    public void Render_GenerationPrompt_EndsWithAssistantTag()
     {
         var renderer = CreateRenderer();
         var messages = new List<ChatMessage>
@@ -146,7 +146,7 @@ public class MinionChatRendererTests
 
         var result = renderer.Render(messages, addGenerationPrompt: true);
 
-        Assert.EndsWith("<|im_start|>assistant\n<think>\n", result);
+        Assert.EndsWith("<|im_start|>assistant\n", result);
     }
 
     [Fact]
@@ -278,7 +278,7 @@ public class MinionChatRendererTests
 
         // Should have tools system block + generation prompt
         Assert.Contains("<|im_start|>system", result);
-        Assert.Contains("<|im_start|>assistant\n<think>\n", result);
+        Assert.Contains("<|im_start|>assistant\n", result);
     }
 
     private static int CountOccurrences(string text, string pattern)
