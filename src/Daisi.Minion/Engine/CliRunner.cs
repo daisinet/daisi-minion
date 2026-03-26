@@ -31,6 +31,7 @@ public sealed class CliRunner : MinionBase
     private int? _maxTokensArg;
     private int _maxIterations = 20;
     private string? _roleArg;
+    private string? _kvQuantArg;
     private bool _jsonOutput;
 
     public CliRunner(ConfigManager configManager, MinionTypeConfig? typeConfig = null)
@@ -62,6 +63,9 @@ public sealed class CliRunner : MinionBase
                     break;
                 case "--role" when i + 1 < args.Length:
                     _roleArg = args[++i];
+                    break;
+                case "--kv-quant" when i + 1 < args.Length:
+                    _kvQuantArg = args[++i];
                     break;
                 case "--json":
                     _jsonOutput = true;
@@ -245,6 +249,16 @@ public sealed class CliRunner : MinionBase
 
             ModelHandle = ((DaisiLlogosModelHandleAdapter)handleAdapter).Inner;
             ActiveContextSize = contextSize;
+
+            // Apply KV compression if configured
+            var kvQuant = _kvQuantArg ?? ConfigManager.Config.KvQuant;
+            if (!string.IsNullOrEmpty(kvQuant))
+            {
+                ModelHandle.TurboConfig = Daisi.Llogos.Inference.DaisiTurbo.TurboQuantConfig.Parse(kvQuant);
+                var bpd = ModelHandle.TurboConfig.EffectiveBitsPerDim(ModelHandle.Config.KeyLength);
+                ReportInfo($"KV compression: {kvQuant} ({bpd:F1} bits/dim)");
+            }
+
             ReportInfo($"Loaded {ModelHandle.ModelId} ({ModelHandle.Config.Architecture}, {ModelHandle.Config.NumLayers}L, ctx={contextSize})");
             return true;
         }
