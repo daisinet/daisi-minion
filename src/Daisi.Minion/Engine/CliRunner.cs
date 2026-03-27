@@ -32,6 +32,7 @@ public sealed class CliRunner : MinionBase
     private int _maxIterations = 20;
     private string? _roleArg;
     private string? _kvQuantArg;
+    private int? _gpuLayersArg;
     private bool _jsonOutput;
 
     public CliRunner(ConfigManager configManager, MinionTypeConfig? typeConfig = null)
@@ -66,6 +67,9 @@ public sealed class CliRunner : MinionBase
                     break;
                 case "--kv-quant" when i + 1 < args.Length:
                     _kvQuantArg = args[++i];
+                    break;
+                case "--gpu-layers" when i + 1 < args.Length:
+                    if (int.TryParse(args[++i], out var gl)) _gpuLayersArg = gl;
                     break;
                 case "--json":
                     _jsonOutput = true;
@@ -240,15 +244,18 @@ public sealed class CliRunner : MinionBase
             var profile = ModelProfile.Load(modelPath);
             var contextSize = _contextSizeArg ?? profile?.ContextSize ?? ConfigManager.Config.ContextSize;
 
+            var gpuLayers = _gpuLayersArg ?? 0;
             var handleAdapter = await llogosBackend.LoadModelAsync(new Daisi.Inference.Models.ModelLoadRequest
             {
                 ModelId = Path.GetFileNameWithoutExtension(modelPath),
                 FilePath = modelPath,
                 ContextSize = (uint)contextSize,
+                GpuLayerCount = gpuLayers,
             });
 
             ModelHandle = ((DaisiLlogosModelHandleAdapter)handleAdapter).Inner;
             ActiveContextSize = contextSize;
+            ModelHandle.GpuLayerCount = gpuLayers;
 
             // Apply KV compression if configured
             var kvQuant = _kvQuantArg ?? ConfigManager.Config.KvQuant;
