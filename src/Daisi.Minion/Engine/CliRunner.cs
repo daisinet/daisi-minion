@@ -1,7 +1,6 @@
 using System.Text;
-using Daisi.Minion.Coding;
-using Daisi.Minion.Coding.Tools;
 using Daisi.Minion.Config;
+using Daisi.Minion.Types;
 using Daisi.Llogos.Chat;
 using Daisi.Llogos.Inference;
 
@@ -22,17 +21,9 @@ namespace Daisi.Minion.Engine;
 ///   daisi-minion --cli --role coder              Override active role
 ///   daisi-minion --cli --json                    Output structured JSON lines
 /// </summary>
-public sealed class CliRunner : IDisposable
+public sealed class CliRunner : MinionBase
 {
-    private readonly ConfigManager _configManager;
-    private readonly CodingToolRegistry _toolRegistry = new();
-    private readonly ProjectContext _projectContext;
-    private readonly CancellationTokenSource _cts = new();
-    private ConversationManager? _conversation;
-    private DaisiLlogosModelHandle? _modelHandle;
-    private int _activeContextSize;
-
-    // CLI options
+    // CLI option overrides
     private string? _goalArg;
     private string? _modelPathArg;
     private int? _contextSizeArg;
@@ -40,21 +31,12 @@ public sealed class CliRunner : IDisposable
     private int? _maxTokensArg;
     private int _maxIterations = 20;
     private string? _roleArg;
+    private string? _kvQuantArg;
+    private int? _gpuLayersArg;
     private bool _jsonOutput;
 
-    public CliRunner(ConfigManager configManager)
-    {
-        _configManager = configManager;
-        _projectContext = new ProjectContext(Directory.GetCurrentDirectory());
-
-        _toolRegistry.Register(new FileReadTool());
-        _toolRegistry.Register(new FileWriteTool());
-        _toolRegistry.Register(new FileEditTool());
-        _toolRegistry.Register(new GrepTool());
-        _toolRegistry.Register(new GlobTool());
-        _toolRegistry.Register(new ShellExecuteTool());
-        _toolRegistry.Register(new GitTool());
-    }
+    public CliRunner(ConfigManager configManager, MinionTypeConfig? typeConfig = null)
+        : base(configManager, typeConfig) { }
 
     public void ParseArgs(string[] args)
     {
@@ -83,6 +65,12 @@ public sealed class CliRunner : IDisposable
                 case "--role" when i + 1 < args.Length:
                     _roleArg = args[++i];
                     break;
+                case "--kv-quant" when i + 1 < args.Length:
+                    _kvQuantArg = args[++i];
+                    break;
+                case "--gpu-layers" when i + 1 < args.Length:
+                    if (int.TryParse(args[++i], out var gl)) _gpuLayersArg = gl;
+                    break;
                 case "--json":
                     _jsonOutput = true;
                     break;
@@ -92,9 +80,9 @@ public sealed class CliRunner : IDisposable
 
     public async Task<int> RunAsync()
     {
-        Console.CancelKeyPress += (_, e) => { e.Cancel = true; _cts.Cancel(); };
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; Cts.Cancel(); };
 
-        await _projectContext.RefreshAsync(_cts.Token);
+        await ProjectContext.RefreshAsync(Cts.Token);
 
         if (!await LoadModelAsync())
             return 1;
@@ -107,136 +95,20 @@ public sealed class CliRunner : IDisposable
         return await RunInteractiveAsync();
     }
 
-    private async Task<int> RunInteractiveAsync()
+    protected override string BuildSystemPrompt()
     {
-        WriteInfo($"Model: {_modelHandle!.ModelId} ({_modelHandle.Config.Architecture})");
-        WriteInfo($"Context: {_activeContextSize}, Backend: {_configManager.Config.Backend}");
-        WriteInfo("Type your message (Ctrl+C to exit):");
-        Console.Error.WriteLine();
-
-        while (!_cts.IsCancellationRequested)
+        // Apply role override from CLI args
+        if (_roleArg != null)
         {
-            Console.Error.Write("> ");
-            var input = Console.ReadLine();
-
-            if (input == null) // EOF / Ctrl+C
-                break;
-
-            if (string.IsNullOrWhiteSpace(input))
-                continue;
-
-            await ProcessMessage(input);
-            Console.Out.WriteLine(); // blank line between exchanges
+            ConfigManager.Config.ActiveRole = _roleArg;
         }
-
-        return 0;
+        return base.BuildSystemPrompt();
     }
 
-    private async Task<int> RunGoalAsync(string goal)
-    {
-        WriteInfo($"Model: {_modelHandle!.ModelId}");
-        WriteInfo($"Goal: {goal}");
-        WriteInfo($"Max iterations: {_maxIterations}");
+    // --- Presentation overrides ---
 
-        var goalPrompt = $"""
-            Your goal: {goal}
-
-            Work toward this goal autonomously. Use your tools to explore, read files, make changes, run commands — whatever is needed.
-
-            After each step, evaluate your progress:
-            - If the goal is NOT yet complete, explain what you'll do next and continue working.
-            - If the goal IS complete, respond with exactly "GOAL_COMPLETE" on its own line, followed by a brief summary of what was accomplished.
-
-            Do not ask the user for input. Make decisions yourself and keep going.
-            """;
-
-        try
-        {
-            for (int iteration = 1; iteration <= _maxIterations; iteration++)
-            {
-                _cts.Token.ThrowIfCancellationRequested();
-
-                WriteInfo($"--- Iteration {iteration}/{_maxIterations} ---");
-
-                var message = iteration == 1
-                    ? goalPrompt
-                    : "Continue working toward the goal. If complete, respond with GOAL_COMPLETE.";
-
-                var fullResponse = await RunAgenticStep(message);
-
-                if (fullResponse.Contains("GOAL_COMPLETE", StringComparison.OrdinalIgnoreCase))
-                {
-                    WriteInfo($"Goal completed in {iteration} iteration(s).");
-                    return 0;
-                }
-
-                if (iteration == _maxIterations)
-                {
-                    WriteInfo($"Reached max iterations ({_maxIterations}). Goal may not be fully complete.");
-                    return 2;
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            WriteInfo("Goal interrupted.");
-            return 130;
-        }
-
-        return 0;
-    }
-
-    private async Task ProcessMessage(string input)
-    {
-        try
-        {
-            await RunAgenticStep(input);
-        }
-        catch (OperationCanceledException)
-        {
-            Console.Error.WriteLine("(interrupted)");
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"Error: {ex.Message}");
-        }
-    }
-
-    private async Task<string> RunAgenticStep(string userMessage)
-    {
-        var parameters = GetGenerationParams();
-        var ct = _cts.Token;
-
-        var fullResponse = await StreamToConsole(
-            _conversation!.SendAsync(userMessage, parameters, ct), ct);
-
-        // Agentic tool loop
-        var toolFmt = MinionToolFormatter.Instance;
-        while (toolFmt.ContainsToolCalls(fullResponse))
-        {
-            var toolCalls = toolFmt.ParseToolCalls(fullResponse);
-            if (toolCalls.Count == 0) break;
-
-            for (int i = 0; i < toolCalls.Count; i++)
-            {
-                var call = toolCalls[i];
-                WriteToolCall(call.Name, call.Arguments.ToJsonString());
-
-                var result = await _toolRegistry.ExecuteAsync(call, ct);
-                WriteToolResult(call.Name, result.Output, result.IsError);
-
-                _conversation!.AddToolResult(call.Name, result.Output);
-                TrackFileFromToolCall(call);
-            }
-
-            fullResponse = await StreamToConsole(
-                _conversation!.ResumeAsync(parameters, ct), ct);
-        }
-
-        return fullResponse;
-    }
-
-    private async Task<string> StreamToConsole(IAsyncEnumerable<string> tokens, CancellationToken ct)
+    protected override async Task<string> StreamTokensAsync(
+        IAsyncEnumerable<string> tokens, CancellationToken ct)
     {
         var full = new StringBuilder();
         await foreach (var token in tokens.WithCancellation(ct))
@@ -248,139 +120,7 @@ public sealed class CliRunner : IDisposable
         return full.ToString();
     }
 
-    private async Task<bool> LoadModelAsync()
-    {
-        var modelPath = _modelPathArg ?? _configManager.Config.ActiveModel;
-
-        // If --model was explicitly passed, don't fall back to searching
-        if (_modelPathArg != null && !File.Exists(_modelPathArg))
-        {
-            Console.Error.WriteLine($"Error: Model file not found: {_modelPathArg}");
-            return false;
-        }
-
-        if (string.IsNullOrEmpty(modelPath) || !File.Exists(modelPath))
-        {
-            // Try to find one in the models directory
-            modelPath = FindFirstModel();
-        }
-
-        if (string.IsNullOrEmpty(modelPath) || !File.Exists(modelPath))
-        {
-            Console.Error.WriteLine($"Error: No model found. Specify --model <path> or place a GGUF in {_configManager.Config.ModelsDirectory}");
-            return false;
-        }
-
-        WriteInfo($"Loading {Path.GetFileName(modelPath)}...");
-
-        var backend = _backendArg ?? _configManager.Config.Backend;
-        Daisi.Llogos.Cpu.CpuThreading.ThreadCount = _configManager.Config.ThreadCount;
-
-        try
-        {
-            var llogosBackend = new DaisiLlogosTextBackend();
-            llogosBackend.OnLog = msg => WriteInfo(msg);
-            await llogosBackend.ConfigureAsync(new Daisi.Inference.Models.BackendConfiguration
-            {
-                Runtime = backend,
-            });
-
-            var profile = ModelProfile.Load(modelPath);
-            var contextSize = _contextSizeArg ?? profile?.ContextSize ?? _configManager.Config.ContextSize;
-
-            var handleAdapter = await llogosBackend.LoadModelAsync(new Daisi.Inference.Models.ModelLoadRequest
-            {
-                ModelId = Path.GetFileNameWithoutExtension(modelPath),
-                FilePath = modelPath,
-                ContextSize = (uint)contextSize,
-            });
-
-            _modelHandle = ((DaisiLlogosModelHandleAdapter)handleAdapter).Inner;
-            _activeContextSize = contextSize;
-            WriteInfo($"Loaded {_modelHandle.ModelId} ({_modelHandle.Config.Architecture}, {_modelHandle.Config.NumLayers}L, ctx={contextSize})");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"Error: Failed to load model: {ex.Message}");
-            return false;
-        }
-    }
-
-    private void InitializeConversation()
-    {
-        if (_modelHandle == null) return;
-
-        var roleName = _roleArg ?? _configManager.Config.ActiveRole ?? "chat";
-        var roles = new RoleManager();
-        var sb = new StringBuilder();
-        sb.AppendLine($"You are {_configManager.Config.MinionName}, a local AI assistant.");
-        sb.AppendLine();
-
-        if (!roles.Exists(roleName)) roleName = "chat";
-        var roleContent = roles.GetContent(roleName);
-        if (roleContent != null)
-        {
-            sb.AppendLine(roleContent);
-            sb.AppendLine();
-        }
-
-        sb.Append(_projectContext.ToSystemPromptSection());
-
-        var toolDefs = _toolRegistry.GetToolDefinitions();
-        _conversation = new ConversationManager(sb.ToString(), toolDefs);
-        _conversation.Initialize(_modelHandle);
-    }
-
-    private string? FindFirstModel()
-    {
-        var dir = _configManager.Config.ModelsDirectory;
-        if (!Directory.Exists(dir)) return null;
-
-        var files = new List<string>();
-        files.AddRange(Directory.EnumerateFiles(dir, "*.gguf"));
-        foreach (var subDir in Directory.EnumerateDirectories(dir))
-            files.AddRange(Directory.EnumerateFiles(subDir, "*.gguf"));
-
-        return files.Count > 0 ? files[0] : null;
-    }
-
-    private GenerationParams GetGenerationParams()
-    {
-        var modelPath = _modelPathArg ?? _configManager.Config.ActiveModel;
-        var profile = !string.IsNullOrEmpty(modelPath) ? ModelProfile.Load(modelPath) : null;
-
-        return new GenerationParams
-        {
-            MaxTokens = _maxTokensArg ?? profile?.MaxTokens ?? _configManager.Config.MaxTokens,
-            Temperature = profile?.Temperature ?? _configManager.Config.Temperature,
-            TopK = profile?.TopK ?? 40,
-            TopP = profile?.TopP ?? 0.9f,
-            RepetitionPenalty = profile?.RepetitionPenalty ?? 1.1f,
-        };
-    }
-
-    private void TrackFileFromToolCall(ToolCall call)
-    {
-        if (!call.Arguments.TryGetPropertyValue("path", out var pathNode)) return;
-        var path = pathNode?.GetValue<string>();
-        if (string.IsNullOrEmpty(path)) return;
-
-        switch (call.Name)
-        {
-            case "file_read":
-                _conversation?.TrackFileRead(path);
-                break;
-            case "file_write":
-            case "file_edit":
-                _conversation?.TrackFileModified(path);
-                break;
-        }
-    }
-
-    private void WriteInfo(string message) => Console.Error.WriteLine(message);
-
-    private void WriteToolCall(string name, string argsJson)
+    protected override void ReportToolCall(string name, string argsJson)
     {
         if (_jsonOutput)
             Console.Error.WriteLine($"{{\"event\":\"tool_call\",\"name\":\"{Escape(name)}\",\"args\":{argsJson}}}");
@@ -388,7 +128,7 @@ public sealed class CliRunner : IDisposable
             Console.Error.WriteLine($"  [{name}] {TruncateArgs(argsJson)}");
     }
 
-    private void WriteToolResult(string name, string output, bool isError)
+    protected override void ReportToolResult(string name, string output, bool isError)
     {
         if (_jsonOutput)
         {
@@ -402,6 +142,168 @@ public sealed class CliRunner : IDisposable
         }
     }
 
+    protected override void ReportInfo(string message) => Console.Error.WriteLine(message);
+    protected override void ReportError(string message) => Console.Error.WriteLine($"Error: {message}");
+
+    // --- CLI-specific methods ---
+
+    private async Task<int> RunInteractiveAsync()
+    {
+        ReportInfo($"Model: {ModelHandle!.ModelId} ({ModelHandle.Config.Architecture})");
+        ReportInfo($"Context: {ActiveContextSize}, Backend: {ConfigManager.Config.Backend}");
+        ReportInfo("Type your message (Ctrl+C to exit):");
+        Console.Error.WriteLine();
+
+        while (!Cts.IsCancellationRequested)
+        {
+            Console.Error.Write("> ");
+            var input = Console.ReadLine();
+
+            if (input == null) break;
+            if (string.IsNullOrWhiteSpace(input)) continue;
+
+            try
+            {
+                await RunAgenticStepAsync(input, Cts.Token);
+                Console.Out.WriteLine();
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("(interrupted)");
+            }
+            catch (Exception ex)
+            {
+                ReportError(ex.Message);
+            }
+        }
+
+        return 0;
+    }
+
+    private async Task<int> RunGoalAsync(string goal)
+    {
+        ReportInfo($"Model: {ModelHandle!.ModelId}");
+        ReportInfo($"Goal: {goal}");
+        ReportInfo($"Max iterations: {_maxIterations}");
+
+        try
+        {
+            var (iterations, completed) = await RunGoalLoopAsync(goal, _maxIterations, Cts.Token);
+
+            if (completed)
+            {
+                ReportInfo($"Goal completed in {iterations} iteration(s).");
+                return 0;
+            }
+            else
+            {
+                ReportInfo($"Reached max iterations ({_maxIterations}). Goal may not be fully complete.");
+                return 2;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            ReportInfo("Goal interrupted.");
+            return 130;
+        }
+    }
+
+    private async Task<bool> LoadModelAsync()
+    {
+        var modelPath = _modelPathArg ?? ConfigManager.Config.ActiveModel;
+
+        if (_modelPathArg != null && !File.Exists(_modelPathArg))
+        {
+            Console.Error.WriteLine($"Error: Model file not found: {_modelPathArg}");
+            return false;
+        }
+
+        if (string.IsNullOrEmpty(modelPath) || !File.Exists(modelPath))
+            modelPath = FindFirstModel();
+
+        if (string.IsNullOrEmpty(modelPath) || !File.Exists(modelPath))
+        {
+            Console.Error.WriteLine($"Error: No model found. Specify --model <path> or place a GGUF in {ConfigManager.Config.ModelsDirectory}");
+            return false;
+        }
+
+        ReportInfo($"Loading {Path.GetFileName(modelPath)}...");
+
+        var backend = _backendArg ?? ConfigManager.Config.Backend;
+        Daisi.Llogos.Cpu.CpuThreading.ThreadCount = ConfigManager.Config.ThreadCount;
+
+        try
+        {
+            var llogosBackend = new DaisiLlogosTextBackend();
+            llogosBackend.OnLog = msg => ReportInfo(msg);
+            await llogosBackend.ConfigureAsync(new Daisi.Inference.Models.BackendConfiguration
+            {
+                Runtime = backend,
+            });
+
+            var profile = ModelProfile.Load(modelPath);
+            var contextSize = _contextSizeArg ?? profile?.ContextSize ?? ConfigManager.Config.ContextSize;
+
+            var gpuLayers = _gpuLayersArg ?? 0;
+            var handleAdapter = await llogosBackend.LoadModelAsync(new Daisi.Inference.Models.ModelLoadRequest
+            {
+                ModelId = Path.GetFileNameWithoutExtension(modelPath),
+                FilePath = modelPath,
+                ContextSize = (uint)contextSize,
+                GpuLayerCount = gpuLayers,
+            });
+
+            ModelHandle = ((DaisiLlogosModelHandleAdapter)handleAdapter).Inner;
+            ActiveContextSize = contextSize;
+            ModelHandle.GpuLayerCount = gpuLayers;
+
+            // Apply KV compression if configured
+            var kvQuant = _kvQuantArg ?? ConfigManager.Config.KvQuant;
+            if (!string.IsNullOrEmpty(kvQuant))
+            {
+                ModelHandle.TurboConfig = Daisi.Llogos.Inference.DaisiTurbo.TurboQuantConfig.Parse(kvQuant);
+                var bpd = ModelHandle.TurboConfig.EffectiveBitsPerDim(ModelHandle.Config.KeyLength);
+                ReportInfo($"KV compression: {kvQuant} ({bpd:F1} bits/dim)");
+            }
+
+            ReportInfo($"Loaded {ModelHandle.ModelId} ({ModelHandle.Config.Architecture}, {ModelHandle.Config.NumLayers}L, ctx={contextSize})");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error: Failed to load model: {ex.Message}");
+            return false;
+        }
+    }
+
+    protected override GenerationParams GetGenerationParams()
+    {
+        var modelPath = ConfigManager.Config.ActiveModel;
+        var profile = !string.IsNullOrEmpty(modelPath) ? ModelProfile.Load(modelPath) : null;
+
+        return new GenerationParams
+        {
+            MaxTokens = _maxTokensArg ?? profile?.MaxTokens ?? ConfigManager.Config.MaxTokens,
+            Temperature = profile?.Temperature ?? ConfigManager.Config.Temperature,
+            TopK = profile?.TopK ?? 40,
+            TopP = profile?.TopP ?? 0.9f,
+            RepetitionPenalty = profile?.RepetitionPenalty ?? 1.1f,
+        };
+    }
+
+    private string? FindFirstModel()
+    {
+        var dir = ConfigManager.Config.ModelsDirectory;
+        if (!Directory.Exists(dir)) return null;
+
+        var files = new List<string>();
+        files.AddRange(Directory.EnumerateFiles(dir, "*.gguf"));
+        foreach (var subDir in Directory.EnumerateDirectories(dir))
+            files.AddRange(Directory.EnumerateFiles(subDir, "*.gguf"));
+
+        return files.Count > 0 ? files[0] : null;
+    }
+
     private static string Truncate(string s, int max) =>
         s.Length <= max ? s.Replace('\n', ' ') : s[..max].Replace('\n', ' ') + "...";
 
@@ -410,11 +312,4 @@ public sealed class CliRunner : IDisposable
 
     private static string Escape(string s) =>
         s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "");
-
-    public void Dispose()
-    {
-        _conversation?.Dispose();
-        _modelHandle?.Dispose();
-        _cts.Dispose();
-    }
 }

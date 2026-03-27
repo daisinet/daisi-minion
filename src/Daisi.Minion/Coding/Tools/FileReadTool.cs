@@ -5,6 +5,10 @@ namespace Daisi.Minion.Coding.Tools;
 
 public sealed class FileReadTool : IMinionTool
 {
+    private readonly ToolSandbox? _sandbox;
+
+    public FileReadTool(ToolSandbox? sandbox = null) => _sandbox = sandbox;
+
     public string Name => "file_read";
     public string Description => "Read a file from disk. Returns the file content with line numbers. Use offset and limit for large files.";
 
@@ -15,7 +19,7 @@ public sealed class FileReadTool : IMinionTool
         {
             ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Absolute or relative file path" },
             ["offset"] = new JsonObject { ["type"] = "integer", ["description"] = "Line number to start from (1-based, default 1)" },
-            ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max lines to read (default 200)" },
+            ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max lines to read (default 2000)" },
         },
         ["required"] = new JsonArray("path"),
     };
@@ -26,12 +30,14 @@ public sealed class FileReadTool : IMinionTool
         if (string.IsNullOrEmpty(path))
             return ToolResult.Error("Missing required parameter: path");
 
-        path = Path.GetFullPath(path);
+        try { path = _sandbox?.ResolvePath(path) ?? Path.GetFullPath(path); }
+        catch (InvalidOperationException ex) { return ToolResult.Error(ex.Message); }
+
         if (!File.Exists(path))
             return ToolResult.Error($"File not found: {path}");
 
-        int offset = arguments["offset"]?.GetValue<int>() ?? 1;
-        int limit = arguments["limit"]?.GetValue<int>() ?? 200;
+        int offset = ToolArgs.GetInt(arguments, "offset", 1);
+        int limit = ToolArgs.GetInt(arguments, "limit", 100);
         if (offset < 1) offset = 1;
 
         var lines = await File.ReadAllLinesAsync(path, ct);
@@ -42,8 +48,14 @@ public sealed class FileReadTool : IMinionTool
             sb.AppendLine($"{i + 1,6}\t{lines[i]}");
 
         if (end < lines.Length)
-            sb.AppendLine($"... ({lines.Length - end} more lines)");
+            sb.AppendLine($"... ({lines.Length - end} more lines, use offset={end + 1} to continue)");
 
-        return ToolResult.Success(sb.ToString());
+        // Hard cap to prevent context flooding
+        const int maxChars = 4000;
+        var output = sb.ToString();
+        if (output.Length > maxChars)
+            output = output[..maxChars] + $"\n... (output truncated at {maxChars} chars, use offset/limit for specific sections)";
+
+        return ToolResult.Success(output);
     }
 }

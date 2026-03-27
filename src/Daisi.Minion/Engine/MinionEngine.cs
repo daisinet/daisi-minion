@@ -32,6 +32,10 @@ public sealed class MinionEngine : IDisposable
     private DualModeOrchestrator? _dualMode;
     private readonly CancellationTokenSource _cts = new();
     private CancellationTokenSource? _inferenceCts;
+    private string _lastUserInput = "";
+    private string _lastResponse = "";
+    private string _lastRenderedPrompt = "";
+    private string _spinnerBase = "Thinking...";
 
     // Layout components
     private LayoutManager? _layout;
@@ -40,7 +44,11 @@ public sealed class MinionEngine : IDisposable
     public MinionEngine(ConfigManager configManager)
     {
         _configManager = configManager;
-        _projectContext = new ProjectContext(Directory.GetCurrentDirectory());
+        var workDir = _configManager.Config.WorkingDirectory;
+        if (string.IsNullOrEmpty(workDir) || !Directory.Exists(workDir))
+            workDir = Directory.GetCurrentDirectory();
+        Directory.SetCurrentDirectory(workDir);
+        _projectContext = new ProjectContext(workDir);
 
         // Register tools
         _toolRegistry.Register(new FileReadTool());
@@ -58,29 +66,46 @@ public sealed class MinionEngine : IDisposable
     public async Task RunAsync()
     {
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; _cts.Cancel(); };
+        InferenceLog.Reset("startup");
+        InferenceLog.Log($"Config: model={_configManager.Config.ActiveModel}");
+        InferenceLog.Log($"Config: backend={_configManager.Config.Backend}, ctx={_configManager.Config.ContextSize}, threads={_configManager.Config.ThreadCount}");
+        InferenceLog.Log($"Config: role={_configManager.Config.ActiveRole}, persona={_configManager.Config.ActivePersona}, name={_configManager.Config.MinionName}");
+        InferenceLog.Log($"Config: working_directory={_configManager.Config.WorkingDirectory}");
 
         _renderer.WriteBanner(_configManager.Config.MinionName);
 
-        // Gather project context
-        await _projectContext.RefreshAsync(_cts.Token);
+        using (var spin = new Tui.StartupSpinner("Scanning project..."))
+        {
+            await _projectContext.RefreshAsync(_cts.Token);
+            InferenceLog.Log($"Project: dir={_projectContext.WorkingDirectory}, branch={_projectContext.GitBranch}");
+            spin.Finish("Project scanned");
+        }
 
-        // Try to load the configured model
         await TryLoadModelAsync();
 
-        // Initialize layout (after model load so banner/load messages appear above)
-        InitializeLayout();
+        if (_modelHandle != null)
+        {
+            InferenceLog.Log($"Model: {_modelHandle.ModelId} ({_modelHandle.Config.Architecture}, {_modelHandle.Config.NumLayers}L, {_modelHandle.Config.HiddenDim}D)");
+            InferenceLog.Log($"Model: ctx={_activeContextSize}, backend={_modelHandle.Backend.Name}");
 
-        // Initialize conversation
-        InitializeConversation();
+            var modelPath = _configManager.Config.ActiveModel;
+            var profile = !string.IsNullOrEmpty(modelPath) ? Config.ModelProfile.Load(modelPath) : null;
+            if (profile != null)
+                InferenceLog.Log($"Profile: temp={profile.Temperature}, top_k={profile.TopK}, top_p={profile.TopP}, rep_pen={profile.RepetitionPenalty}, max_tok={profile.MaxTokens}");
+        }
 
-        // Initialize dual-mode (host when idle)
-        InitializeDualMode();
-
-        // Register slash commands
-        RegisterCommands();
-
-        // Set status bar indicators
-        SetInitialIndicators();
+        using (var spin = new Tui.StartupSpinner("Initializing..."))
+        {
+            InitializeLayout();
+            spin.Update("Building conversation...");
+            InitializeConversation();
+            spin.Update("Starting services...");
+            // InitializeDualMode(); — disabled until host-mode coexistence with inference is resolved
+            RegisterCommands();
+            SetInitialIndicators();
+            InferenceLog.Log("Ready");
+            spin.Finish("Ready");
+        }
 
         // Main loop
         while (!_cts.IsCancellationRequested)
@@ -101,12 +126,6 @@ public sealed class MinionEngine : IDisposable
                 if (input.Equals("/exit", StringComparison.OrdinalIgnoreCase))
                     break;
 
-                if (input.Equals("/clear", StringComparison.OrdinalIgnoreCase))
-                {
-                    _layout?.ClearContent();
-                    continue;
-                }
-
                 if (!await _commands.ExecuteAsync(input, _cts.Token))
                     _renderer.WriteError($"Unknown command: {input}. Type /help for available commands.");
                 _renderer.WriteLine();
@@ -119,8 +138,10 @@ public sealed class MinionEngine : IDisposable
                 continue;
             }
 
+            _lastUserInput = input;
             _renderer.WriteUserInput(input);
             await ProcessUserMessage(input);
+            _lastRenderedPrompt = _conversation?.RenderPrompt() ?? "";
         }
 
         _renderer.WriteInfo("Goodbye!");
@@ -134,6 +155,7 @@ public sealed class MinionEngine : IDisposable
         _input.SetLayout(_layout, _output);
         _input.OnCycleRole(CycleRole);
         _input.OnCyclePersona(CyclePersona);
+        _input.OnShowLastResponse(ShowRawLastResponse);
         _layout.Initialize();
     }
 
@@ -172,9 +194,21 @@ public sealed class MinionEngine : IDisposable
         // Listen for double-Escape in the background to cancel inference
         _ = Task.Run(() => ListenForEscapeCancel(_inferenceCts));
 
-        // Show spinner while generating
-        _output?.UpdateStatus(sb => sb.StartSpinner("Thinking...", () =>
-            _output?.TickSpinner()));
+        // Show spinner with live wall-clock timer that ticks even during prefill
+        var wallClock = System.Diagnostics.Stopwatch.StartNew();
+        _spinnerBase = "Thinking...";
+        _output?.UpdateStatus(sb => sb.StartSpinner(_spinnerBase, () =>
+        {
+            var elapsed = wallClock.Elapsed;
+            var timeStr = elapsed.TotalSeconds < 60
+                ? $"{elapsed.TotalSeconds:F0}s"
+                : $"{(int)elapsed.TotalMinutes}m {elapsed.Seconds:D2}s";
+            sb.SetSpinnerMessage($"{_spinnerBase}  <{timeStr}>");
+            _output?.TickSpinner();
+        }));
+
+        // Debug: log the rendered prompt for this request
+        InferenceLog.BeginRequest(input, _conversation?.RenderPrompt() ?? "");
 
         try
         {
@@ -188,33 +222,27 @@ public sealed class MinionEngine : IDisposable
                 var toolCalls = toolFmt.ParseToolCalls(fullResponse);
                 if (toolCalls.Count == 0) break;
 
-                _output?.UpdateStatus(sb =>
-                {
-                    sb.StopSpinner();
-                    sb.StartSpinner($"Running {toolCalls.Count} tool(s)...", () =>
-                        _output?.TickSpinner());
-                });
+                _spinnerBase = $"Running {toolCalls.Count} tool(s)...";
 
                 var results = await toolExecutor.ExecuteToolCallsAsync(toolCalls, ct);
 
-                // Inject results and track file operations
+                // Log and inject results
                 for (int i = 0; i < results.Count; i++)
                 {
+                    InferenceLog.ToolCall(results[i].Name, toolCalls[i].Arguments.ToJsonString(),
+                        results[i].Output, results[i].Output.StartsWith("Error"));
                     var (name, output) = results[i];
                     _conversation.AddToolResult(name, output);
                     TrackFileFromToolCall(toolCalls[i]);
                 }
 
-                _output?.UpdateStatus(sb =>
-                {
-                    sb.StopSpinner();
-                    sb.StartSpinner("Generating...", () =>
-                        _output?.TickSpinner());
-                });
+                _spinnerBase = "Generating...";
 
                 fullResponse = await StreamByLine(
                     _conversation.ResumeAsync(parameters, ct), ct);
             }
+
+            _lastResponse = fullResponse;
 
             _output?.UpdateStatus(sb =>
             {
@@ -245,6 +273,7 @@ public sealed class MinionEngine : IDisposable
         }
         catch (Exception ex)
         {
+            InferenceLog.Error("ProcessUserMessage", ex);
             _renderer.WriteError(ex.Message);
             _output?.UpdateStatus(sb =>
             {
@@ -382,8 +411,11 @@ public sealed class MinionEngine : IDisposable
 
     private static void ListenForEscapeCancel(CancellationTokenSource inferenceCts)
     {
+        // Capture the token (a struct) — safe to read even after the CTS is disposed.
+        var ct = inferenceCts.Token;
         var lastEscape = DateTime.MinValue;
-        while (!inferenceCts.IsCancellationRequested)
+
+        while (!ct.IsCancellationRequested)
         {
             if (!Console.KeyAvailable)
             {
@@ -397,7 +429,7 @@ public sealed class MinionEngine : IDisposable
                 var now = DateTime.UtcNow;
                 if ((now - lastEscape).TotalMilliseconds < 500)
                 {
-                    inferenceCts.Cancel();
+                    try { inferenceCts.Cancel(); } catch (ObjectDisposedException) { }
                     return;
                 }
                 lastEscape = now;
@@ -415,23 +447,109 @@ public sealed class MinionEngine : IDisposable
         var fullResponse = new StringBuilder();
         var lineBuffer = new StringBuilder();
         var tokenCount = 0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var lineWriter = _renderer.CreateLineWriter();
         var firstLine = true;
+
+        // Qwen 3.5 may produce <think>...</think> at the start of the response.
+        // Buffer everything until we know whether thinking is present, then strip it.
+        var prefixBuffer = new StringBuilder();
+        var thinkStripped = false; // true once we've resolved the think prefix
+        var toolCallStarted = false; // suppress display once <tool_call> appears
+        var baseContextUsed = _conversation?.ContextUsed ?? 0;
 
         await foreach (var token in tokens.WithCancellation(ct))
         {
             fullResponse.Append(token);
-            lineBuffer.Append(token);
             tokenCount++;
+            InferenceLog.AppendToken(token);
 
-            if (tokenCount % 10 == 0)
+            // Live stats + context bar — update every 5 tokens
+            if (tokenCount % 5 == 0)
             {
                 var count = tokenCount;
-                _output?.UpdateStatus(s =>
+                var elapsed = sw.Elapsed.TotalSeconds;
+                var tokPerSec = elapsed > 0.1 ? count / elapsed : 0;
+                var phase = thinkStripped ? "Generating" : "Thinking";
+                _spinnerBase = $"{phase}  {count} tok  {tokPerSec:F1} tok/s";
+
+                // Live context bar: base usage + generated tokens
+                var estimatedCtx = baseContextUsed + tokenCount;
+                _layout?.StatusBar.SetContextUsage(estimatedCtx, _activeContextSize);
+            }
+
+            // Suppress ALL display once <tool_call> detected.
+            if (!toolCallStarted && token.Contains("<tool_call>"))
+            {
+                toolCallStarted = true;
+                lineBuffer.Clear();
+            }
+            // Also check if it arrived split across tokens (e.g. "<tool_" + "call>")
+            if (!toolCallStarted && fullResponse.Length >= 11)
+            {
+                // Only check the tail of fullResponse, not the whole thing
+                var tail = fullResponse.ToString(Math.Max(0, fullResponse.Length - 20), Math.Min(20, fullResponse.Length));
+                if (tail.Contains("<tool_call>"))
                 {
-                    s.SetIndicator("gen", $"{count} tok");
-                    s.SetContextUsage(_conversation?.ContextUsed ?? 0, _activeContextSize);
-                });
+                    toolCallStarted = true;
+                    lineBuffer.Clear();
+                }
+            }
+            if (toolCallStarted)
+                continue;
+
+            // Phase 1: Buffer prefix to detect and strip <think>...</think>
+            if (!thinkStripped)
+            {
+                prefixBuffer.Append(token);
+                var buf = prefixBuffer.ToString();
+
+                // Check if we have a think/thought closing tag
+                var closeMatch = System.Text.RegularExpressions.Regex.Match(buf,
+                    @"</(?:think|thinking|thought|tool_thought)>",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (closeMatch.Success)
+                {
+                    var afterThink = buf[(closeMatch.Index + closeMatch.Length)..].TrimStart('\r', '\n');
+                    thinkStripped = true;
+                    prefixBuffer.Clear();
+                    if (afterThink.Length > 0)
+                        lineBuffer.Append(afterThink);
+                    continue;
+                }
+
+                var trimmed = buf.TrimStart();
+
+                // Not a think-like block — flush as regular content
+                var isThinkLike = trimmed.StartsWith("<think") || trimmed.StartsWith("<tool_thought");
+                if (trimmed.Length > 7 && !isThinkLike)
+                {
+                    thinkStripped = true;
+                    lineBuffer.Append(buf);
+                    prefixBuffer.Clear();
+                    // fall through to line emission below
+                }
+                // Model opened a think-like tag but never closed it — after enough content,
+                // strip the tag and display the rest
+                else if (isThinkLike && trimmed.Length > 100)
+                {
+                    thinkStripped = true;
+                    // Find the end of the opening tag
+                    var tagEnd = trimmed.IndexOf('>');
+                    var afterTag = tagEnd >= 0 ? trimmed[(tagEnd + 1)..].TrimStart('\r', '\n') : trimmed;
+                    prefixBuffer.Clear();
+                    if (afterTag.Length > 0)
+                        lineBuffer.Append(afterTag);
+                    // fall through to line emission
+                }
+                else
+                {
+                    continue; // still accumulating prefix
+                }
+            }
+            else
+            {
+                lineBuffer.Append(token);
             }
 
             // Emit complete lines
@@ -439,26 +557,49 @@ public sealed class MinionEngine : IDisposable
             {
                 var text = lineBuffer.ToString();
                 var nlIdx = text.IndexOf('\n');
-                var line = text[..nlIdx];
+                var line = CleanLine(text[..nlIdx]);
                 lineBuffer.Clear();
                 lineBuffer.Append(text[(nlIdx + 1)..]);
 
-                if (firstLine) { _renderer.WriteLine(); firstLine = false; }
-                lineWriter.WriteLine(line);
+                if (line.Length > 0)
+                {
+                    if (firstLine) { _renderer.WriteLine(); firstLine = false; }
+                    lineWriter.WriteLine(line);
+                }
             }
         }
 
         // Flush remaining partial line
         if (lineBuffer.Length > 0)
         {
-            if (firstLine) { _renderer.WriteLine(); firstLine = false; }
-            lineWriter.WriteLine(lineBuffer.ToString());
+            var lastLine = CleanLine(lineBuffer.ToString());
+            if (lastLine.Length > 0)
+            {
+                if (firstLine) { _renderer.WriteLine(); firstLine = false; }
+                lineWriter.WriteLine(lastLine);
+            }
         }
         lineWriter.Finish();
         _renderer.WriteLine();
 
-        _output?.UpdateStatus(s => s.SetIndicator("gen", $"{tokenCount} tok"));
+        sw.Stop();
+        var finalTokPerSec = sw.Elapsed.TotalSeconds > 0 ? tokenCount / sw.Elapsed.TotalSeconds : 0;
+        // Stats go to log only — don't clutter the status bar
+        InferenceLog.EndRequest(tokenCount, $"stop_sequence | {finalTokPerSec:F1} tok/s | {sw.Elapsed.TotalSeconds:F1}s");
         return fullResponse.ToString();
+    }
+
+    /// <summary>Strip thinking/action/tool tags and other model artifacts from a display line.</summary>
+    private static string CleanLine(string line)
+    {
+        var cleaned = line;
+        // Strip all known model artifact tags and any XML-like tags the model invents
+        cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned,
+            @"</?(?:think|thinking|thought|tool_thought|tool_call|action|function|parameter)[^>]*>",
+            "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        cleaned = cleaned.Replace("<|im_end|>", "").Replace("<|im_start|>", "");
+        cleaned = cleaned.TrimEnd(':', ' ');
+        return cleaned;
     }
 
     private async Task TryLoadModelAsync()
@@ -482,15 +623,17 @@ public sealed class MinionEngine : IDisposable
             return;
         }
 
-        _renderer.WriteInfoHeader($"Loading {Path.GetFileName(modelPath)}...");
-
         // Apply thread count limit to CPU backend
         Daisi.Llogos.Cpu.CpuThreading.ThreadCount = _configManager.Config.ThreadCount;
+
+        var modelFileName = Path.GetFileName(modelPath);
+        using var loadSpinner = new Tui.StartupSpinner($"Loading {modelFileName}...");
 
         try
         {
             var backend = new DaisiLlogosTextBackend();
-            backend.OnLog = msg => _renderer.WriteInfo(msg);
+            string? backendName = null;
+            backend.OnLog = msg => { backendName = msg; loadSpinner.Update(msg); };
             await backend.ConfigureAsync(new Daisi.Inference.Models.BackendConfiguration
             {
                 Runtime = _configManager.Config.Backend,
@@ -499,9 +642,15 @@ public sealed class MinionEngine : IDisposable
             // Use per-model profile if available; fetch from HuggingFace if missing
             var profile = ModelProfile.Load(modelPath);
             if (profile == null)
+            {
+                loadSpinner.Update("Fetching profile from HuggingFace...");
                 profile = await TryFetchProfileFromHuggingFace(modelPath);
+            }
             var contextSize = profile?.ContextSize ?? _configManager.Config.ContextSize;
 
+            var fileSizeMb = new FileInfo(modelPath).Length / (1024.0 * 1024);
+            var sizeStr = fileSizeMb >= 1024 ? $"{fileSizeMb / 1024:F1} GB" : $"{fileSizeMb:F0} MB";
+            loadSpinner.Update($"Loading {sizeStr} → {backendName ?? "GPU"}...");
             var handleAdapter = await backend.LoadModelAsync(new Daisi.Inference.Models.ModelLoadRequest
             {
                 ModelId = Path.GetFileNameWithoutExtension(modelPath),
@@ -511,13 +660,11 @@ public sealed class MinionEngine : IDisposable
 
             _modelHandle = ((DaisiLlogosModelHandleAdapter)handleAdapter).Inner;
             _activeContextSize = contextSize;
-            if (profile != null)
-                _renderer.WriteInfo($"Profile: temp={profile.Temperature}, top_k={profile.TopK}, top_p={profile.TopP}, ctx={contextSize}");
-            _renderer.WriteSuccess($"Loaded {_modelHandle.ModelId} ({_modelHandle.Config.Architecture}, {_modelHandle.Config.NumLayers}L, {_modelHandle.Config.HiddenDim}D)");
+            loadSpinner.Finish($"{_modelHandle.ModelId} ({_modelHandle.Config.Architecture}, {_modelHandle.Config.NumLayers}L, ctx={contextSize})");
         }
         catch (Exception ex)
         {
-            _renderer.WriteError($"Failed to load model: {ex.Message}");
+            loadSpinner.Fail($"Failed to load: {ex.Message}");
         }
     }
 
@@ -644,6 +791,7 @@ public sealed class MinionEngine : IDisposable
             try
             {
                 await _conversation.CompactAsync(GetGenerationParams(), _cts.Token);
+                InferenceLog.Reset("auto-compact");
                 var newUsed = _conversation.ContextUsed;
                 _output?.UpdateStatus(sb =>
                     sb.SetContextUsage(newUsed, _activeContextSize));
@@ -802,7 +950,7 @@ public sealed class MinionEngine : IDisposable
     private void RegisterCommands()
     {
         _commands.Register("help", new HelpCommandHandler(_renderer));
-        _commands.Register("clear", new ClearCommandHandler(_conversation!, _renderer));
+        _commands.Register("clear", new ClearCommandHandler(_conversation!, _renderer, _layout, _activeContextSize));
         _commands.Register("compact", new CompactCommandHandler(_conversation!, _renderer, GetGenerationParams));
         _commands.Register("model", new ModelCommandHandler(_renderer, _configManager, ReloadModel));
         _commands.Register("role", new RoleCommandHandler(_renderer, _roles, _configManager, () =>
@@ -839,6 +987,28 @@ public sealed class MinionEngine : IDisposable
             InitializeConversation();
         }));
         _commands.Register("goal", new GoalCommandHandler(_renderer, RunGoalAsync));
+    }
+
+    private void ShowRawLastResponse()
+    {
+        var logPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".daisi-minion", "inference.log");
+
+        if (!File.Exists(logPath))
+        {
+            _renderer.WriteInfo("(no inference log)");
+            return;
+        }
+
+        _renderer.WriteLine();
+        _renderer.WriteInfoHeader("── inference.log ──");
+
+        foreach (var line in File.ReadAllLines(logPath))
+            _renderer.WriteInfo(line);
+
+        _renderer.WriteInfoHeader("── end ──");
+        _renderer.WriteLine();
     }
 
     private void CycleRole()
@@ -897,38 +1067,40 @@ public sealed class MinionEngine : IDisposable
 
     private void ReloadModel()
     {
-        Task.Run(async () =>
+        // Run synchronously on the calling thread to keep the CUDA context
+        // on the same thread that will later run inference. Task.Run would
+        // create the context on a threadpool thread, causing ErrorInvalidContext
+        // when the main thread tries to use it.
+        try
         {
-            try
+            // Dispose in dependency order: conversation → dual-mode → model
+            InferenceLog.Reset("model reload");
+            _conversation?.Dispose();
+            _conversation = null;
+
+            if (_dualMode != null)
             {
-                // Dispose in dependency order: conversation → dual-mode → model
-                _conversation?.Dispose();
-                _conversation = null;
-
-                if (_dualMode != null)
-                {
-                    await _dualMode.DisposeAsync();
-                    _dualMode = null;
-                }
-
-                _modelHandle?.Dispose();
-                _modelHandle = null;
-
-                // Allow GPU resources to fully release before creating new context
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-
-                await TryLoadModelAsync();
-                InitializeConversation();
-                InitializeDualMode();
-                SetInitialIndicators();
-                _renderer.WriteSuccess("Model reloaded.");
+                _dualMode.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                _dualMode = null;
             }
-            catch (Exception ex)
-            {
-                _renderer.WriteError($"Reload failed: {ex.Message}");
-            }
-        });
+
+            _modelHandle?.Dispose();
+            _modelHandle = null;
+
+            // Allow GPU resources to fully release before creating new context
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+
+            TryLoadModelAsync().GetAwaiter().GetResult();
+            InitializeConversation();
+            InitializeDualMode();
+            SetInitialIndicators();
+            _renderer.WriteSuccess("Model reloaded.");
+        }
+        catch (Exception ex)
+        {
+            _renderer.WriteError($"Reload failed: {ex.Message}");
+        }
     }
 
     private GenerationParams GetGenerationParams()
@@ -944,6 +1116,7 @@ public sealed class MinionEngine : IDisposable
             TopK = profile?.TopK ?? 40,
             TopP = profile?.TopP ?? 0.9f,
             RepetitionPenalty = profile?.RepetitionPenalty ?? 1.1f,
+            // StopTokens defaults to EOS token — don't override
         };
     }
 

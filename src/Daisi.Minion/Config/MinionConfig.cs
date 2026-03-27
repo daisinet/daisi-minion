@@ -43,6 +43,14 @@ public sealed class MinionConfig
     [JsonPropertyName("minion_name")]
     public string MinionName { get; set; } = "minion";
 
+    /// <summary>Override working directory. If set, the minion cd's here on startup.</summary>
+    [JsonPropertyName("working_directory")]
+    public string? WorkingDirectory { get; set; }
+
+    /// <summary>KV cache compression mode: null (default), "turbo", "turbo:3", "turbo:4", "turbo:3+qjl32".</summary>
+    [JsonPropertyName("kv_quant")]
+    public string? KvQuant { get; set; }
+
     [JsonPropertyName("models")]
     public List<ModelEntry> Models { get; set; } = [];
 }

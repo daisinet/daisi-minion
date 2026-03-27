@@ -88,7 +88,12 @@ public sealed class LayoutManager : IDisposable
         UpdateStatusBar();
         RedrawCommandBar("", 0);
 
-        _resizeTimer = new Timer(_ => CheckResize(), null, 250, 250);
+        _resizeTimer = new Timer(_ =>
+        {
+            // Check without lock first (cheap) to avoid lock contention
+            if (Console.WindowWidth == _termWidth && Console.WindowHeight == _termHeight) return;
+            CheckResize();
+        }, null, 250, 250);
     }
 
     /// <summary>Write text into the content scroll region.</summary>
@@ -142,9 +147,37 @@ public sealed class LayoutManager : IDisposable
         Flush(buf);
     }
 
+    /// <summary>
+    /// Rewrite the spinner area (char + message) on the status bar without
+    /// touching the right side indicators. Avoids full-line clear flicker.
+    /// </summary>
+    public void UpdateSpinnerMessage()
+    {
+        if (!StatusBar.IsSpinning) return;
+
+        var ch = StatusBar.CurrentSpinnerChar ?? " ";
+        var msg = StatusBar.CurrentSpinnerMessage ?? "";
+
+        // Calculate max width for the left side (leave room for right indicators)
+        var maxLeft = _termWidth / 2;
+        if (msg.Length + 4 > maxLeft)
+            msg = msg[..(maxLeft - 4)];
+
+        var buf = new StringBuilder();
+        buf.Append(HideCursor);
+        // Move to start of status bar, write spinner + message, pad with spaces to clear old text
+        buf.Append($"{Esc}{StatusBarRow};1H");
+        var content = $" {ch} {msg}";
+        buf.Append($"{BlackBg}{DimWhite}{content}{new string(' ', Math.Max(0, maxLeft - content.Length))}{Reset}");
+        AppendCursorRestore(buf);
+        Flush(buf);
+    }
+
     /// <summary>Redraw the command bar.</summary>
     public void RedrawCommandBar(string text, int cursorPos)
     {
+        _lastCommandText = text;
+        _lastCursorPos = cursorPos;
         var newHeight = CommandBar.HeightForText(text, _termWidth);
         var maxHeight = Math.Max(1, (_termHeight - 6) / 2);
         newHeight = Math.Min(newHeight, maxHeight);
@@ -259,7 +292,28 @@ public sealed class LayoutManager : IDisposable
         _termWidth = w;
         _termHeight = h;
 
+        // Full screen clear + layout rebuild
+        var buf = new StringBuilder();
+        buf.Append(HideCursor);
+
+        // Remove scroll region temporarily so we can clear everything
+        buf.Append($"{Esc}r");
+
+        // Clear entire screen
+        buf.Append($"{Esc}2J");
+
+        // Move to top
+        buf.Append($"{Esc}1;1H");
+
+        Flush(buf);
+
+        // Re-establish scroll region and redraw all fixed UI
         SetScrollRegion();
         UpdateStatusBar();
+        RedrawCommandBar(_lastCommandText ?? "", _lastCursorPos);
     }
+
+    // Track last command bar state for resize redraws
+    private string? _lastCommandText;
+    private int _lastCursorPos;
 }

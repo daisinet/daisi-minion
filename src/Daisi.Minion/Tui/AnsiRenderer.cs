@@ -186,10 +186,25 @@ public sealed partial class AnsiRenderer
     public void WriteToolCall(string toolName, string argsJson)
     {
         WriteLine();
-        var line = $"  {Yellow}⚡ {toolName}{Reset}";
-        if (argsJson.Length < 100)
-            line += $" {Dim}{argsJson}{Reset}";
-        WriteLine(line);
+        WriteLine($"  {Yellow}⚡ {toolName}{Reset}");
+
+        // Show key parameters in a readable format
+        try
+        {
+            var args = System.Text.Json.JsonDocument.Parse(argsJson);
+            foreach (var prop in args.RootElement.EnumerateObject())
+            {
+                var val = prop.Value.ToString();
+                if (val.Length > 80)
+                    val = val[..77] + "...";
+                WriteLine($"  {Dim}  {prop.Name}: {val}{Reset}");
+            }
+        }
+        catch
+        {
+            if (argsJson.Length < 120)
+                WriteLine($"  {Dim}  {argsJson}{Reset}");
+        }
     }
 
     /// <summary>Write a tool result.</summary>

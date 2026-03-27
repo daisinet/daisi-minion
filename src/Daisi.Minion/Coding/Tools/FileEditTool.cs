@@ -4,6 +4,10 @@ namespace Daisi.Minion.Coding.Tools;
 
 public sealed class FileEditTool : IMinionTool
 {
+    private readonly ToolSandbox? _sandbox;
+
+    public FileEditTool(ToolSandbox? sandbox = null) => _sandbox = sandbox;
+
     public string Name => "file_edit";
     public string Description => "Perform a search-and-replace edit on a file. The old_string must match exactly (including whitespace). Use replace_all to replace all occurrences.";
 
@@ -25,7 +29,7 @@ public sealed class FileEditTool : IMinionTool
         var path = arguments["path"]?.GetValue<string>();
         var oldStr = arguments["old_string"]?.GetValue<string>();
         var newStr = arguments["new_string"]?.GetValue<string>();
-        var replaceAll = arguments["replace_all"]?.GetValue<bool>() ?? false;
+        var replaceAll = ToolArgs.GetBool(arguments, "replace_all");
 
         if (string.IsNullOrEmpty(path))
             return ToolResult.Error("Missing required parameter: path");
@@ -34,18 +38,24 @@ public sealed class FileEditTool : IMinionTool
         if (newStr is null)
             return ToolResult.Error("Missing required parameter: new_string");
 
-        path = Path.GetFullPath(path);
+        try { path = _sandbox?.ResolvePath(path) ?? Path.GetFullPath(path); }
+        catch (InvalidOperationException ex) { return ToolResult.Error(ex.Message); }
+
         if (!File.Exists(path))
             return ToolResult.Error($"File not found: {path}");
 
         var content = await File.ReadAllTextAsync(path, ct);
+
+        // Normalize line endings — model produces \n but files may have \r\n
+        content = content.Replace("\r\n", "\n");
+        oldStr = oldStr.Replace("\r\n", "\n");
+        newStr = newStr.Replace("\r\n", "\n");
 
         if (!content.Contains(oldStr, StringComparison.Ordinal))
             return ToolResult.Error("old_string not found in file");
 
         if (!replaceAll)
         {
-            // Ensure unique match
             int first = content.IndexOf(oldStr, StringComparison.Ordinal);
             int second = content.IndexOf(oldStr, first + 1, StringComparison.Ordinal);
             if (second >= 0)

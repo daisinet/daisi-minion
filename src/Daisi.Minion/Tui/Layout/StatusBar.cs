@@ -19,7 +19,7 @@ public sealed class StatusBar
     private int _contextMax;
 
     private static readonly string[] SpinnerFrames =
-        ["\u28cb", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"];
+        ["\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"];
 
     // Color thresholds (ANSI 256-color)
     private const string Green = "\x1b[38;5;34m";
@@ -30,6 +30,8 @@ public sealed class StatusBar
 
     public const int SpinnerCol = 2;
     public bool IsSpinning => _spinnerActive;
+
+    public string? CurrentSpinnerMessage => _spinnerActive ? _spinnerMessage : null;
 
     public string? CurrentSpinnerChar => _spinnerActive
         ? SpinnerFrames[_spinnerFrame]
@@ -50,6 +52,9 @@ public sealed class StatusBar
             _onSpinnerTick?.Invoke();
         }, null, 120, 120);
     }
+
+    /// <summary>Update just the spinner message text without restarting the timer.</summary>
+    public void SetSpinnerMessage(string message) => _spinnerMessage = message;
 
     public void StopSpinner()
     {
@@ -101,11 +106,24 @@ public sealed class StatusBar
 
         if (gap < 0)
         {
+            // Priority: right (model name) > middle (context bar) > left (spinner)
+            // First try clipping the left
             var maxLeft = width - middleVisible.Length - right.Length - 1;
-            if (maxLeft > 3)
+            if (maxLeft > 10)
+            {
                 left = left[..maxLeft];
+            }
             else
+            {
+                // Drop the context bar to make room
                 middle = "";
+                middleVisible = "";
+                maxLeft = width - right.Length - 1;
+                if (maxLeft > 3)
+                    left = left[..maxLeft];
+                else
+                    left = " ";
+            }
             gap = width - left.Length - StripAnsi(middle).Length - right.Length;
         }
 
