@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
 using Daisi.Minion.Coding;
+using Daisi.Minion.Config;
+using Daisi.Minion.Modules;
 
 namespace Daisi.Minion.Evolution;
 
@@ -221,5 +223,51 @@ public sealed class ListModulesTool : IMinionTool
         }));
 
         return Task.FromResult(ToolResult.Success(output));
+    }
+}
+
+/// <summary>Push an evolved module to the minion's DaisiGit fork.</summary>
+public sealed class PushModuleTool : IMinionTool
+{
+    private readonly ConfigManager _configManager;
+    public PushModuleTool(ConfigManager configManager) => _configManager = configManager;
+
+    public string Name => "push_module";
+    public string Description => "Push a committed module to the remote DaisiGit fork. The module must already be committed locally.";
+
+    public JsonObject ParametersSchema => new()
+    {
+        ["type"] = "object",
+        ["properties"] = new JsonObject
+        {
+            ["name"] = new JsonObject { ["type"] = "string", ["description"] = "Module name to push" },
+        },
+        ["required"] = new JsonArray("name"),
+    };
+
+    public async Task<ToolResult> ExecuteAsync(JsonObject arguments, CancellationToken ct)
+    {
+        var name = ToolArgs.GetString(arguments, "name");
+        if (string.IsNullOrEmpty(name)) return ToolResult.Error("Missing: name");
+
+        var config = _configManager.Config;
+        if (string.IsNullOrEmpty(config.DaisiGitServer) || string.IsNullOrEmpty(config.DaisiGitToken))
+            return ToolResult.Error("DaisiGit not configured. Set daisigit_server and daisigit_token in config.");
+        if (string.IsNullOrEmpty(config.ModulesRepo))
+            return ToolResult.Error("No modules_repo configured.");
+
+        try
+        {
+            using var source = new ModuleRemoteSource(
+                config.DaisiGitServer, config.DaisiGitToken, config.ModulesRepo,
+                config.ModulesBranch);
+
+            await source.PushModuleAsync(name, ct);
+            return ToolResult.Success($"Pushed module '{name}' to {config.ModulesRepo}@{config.ModulesBranch}");
+        }
+        catch (Exception ex)
+        {
+            return ToolResult.Error($"Push failed: {ex.Message}");
+        }
     }
 }

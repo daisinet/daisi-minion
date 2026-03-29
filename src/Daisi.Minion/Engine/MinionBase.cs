@@ -92,10 +92,15 @@ public abstract class MinionBase : IDisposable
 
     /// <summary>
     /// Discover, compile, and load modules from ~/.daisi-minion/modules/.
+    /// If DaisiGit is configured, pulls latest modules from the remote fork first.
     /// Module tools are registered after base tools are sealed.
     /// </summary>
     private void LoadModules()
     {
+        // Pull from DaisiGit if configured
+        if (ConfigManager.Config.PullModules && !string.IsNullOrEmpty(ConfigManager.Config.ModulesRepo))
+            PullRemoteModules();
+
         var loader = new ModuleLoader(log: msg => InferenceLog.Log($"[modules] {msg}"));
         var modules = loader.LoadAll();
 
@@ -118,6 +123,36 @@ public abstract class MinionBase : IDisposable
             ToolRegistry.Register(tool);
 
         InferenceLog.Log($"Loaded {modules.Count} module(s), {ModuleRegistry.GetAllTools().Count} additional tool(s)");
+    }
+
+    /// <summary>
+    /// Pull modules from DaisiGit remote fork to local cache.
+    /// Runs synchronously during startup to ensure modules are available before conversation starts.
+    /// </summary>
+    private void PullRemoteModules()
+    {
+        var config = ConfigManager.Config;
+        if (string.IsNullOrEmpty(config.DaisiGitServer) || string.IsNullOrEmpty(config.DaisiGitToken))
+        {
+            InferenceLog.Log("[modules] DaisiGit pull skipped: server or token not configured");
+            return;
+        }
+
+        try
+        {
+            using var source = new Modules.ModuleRemoteSource(
+                config.DaisiGitServer, config.DaisiGitToken, config.ModulesRepo!,
+                config.ModulesBranch, log: msg => InferenceLog.Log($"[modules] {msg}"));
+
+            var count = source.PullAsync().GetAwaiter().GetResult();
+            if (count > 0)
+                InferenceLog.Log($"[modules] Pulled {count} module(s) from {config.ModulesRepo}");
+        }
+        catch (Exception ex)
+        {
+            InferenceLog.Log($"[modules] Remote pull failed: {ex.Message}");
+            // Continue with local modules — don't block startup on network failure
+        }
     }
 
     /// <summary>
@@ -155,6 +190,7 @@ public abstract class MinionBase : IDisposable
         ToolRegistry.Register(new ReadModuleTool(evolver));
         ToolRegistry.Register(new CommitModuleTool(evolver));
         ToolRegistry.Register(new ListModulesTool(evolver));
+        ToolRegistry.Register(new PushModuleTool(ConfigManager));
 
         InferenceLog.Log("Evolution tools registered (darwin mode)");
     }

@@ -55,6 +55,28 @@ public sealed class MinionConfig
     [JsonPropertyName("grammar_tool_calls")]
     public bool UseGrammarToolCalls { get; set; }
 
+    // ── DaisiGit Module Repository ──
+
+    /// <summary>DaisiGit server URL (e.g., https://git.daisi.ai).</summary>
+    [JsonPropertyName("daisigit_server")]
+    public string? DaisiGitServer { get; set; }
+
+    /// <summary>DaisiGit API key (dg_...) for authenticated access.</summary>
+    [JsonPropertyName("daisigit_token")]
+    public string? DaisiGitToken { get; set; }
+
+    /// <summary>Modules repo on DaisiGit as "owner/slug" (e.g., "myhandle/daisi-minion-modules").</summary>
+    [JsonPropertyName("modules_repo")]
+    public string? ModulesRepo { get; set; }
+
+    /// <summary>Branch to pull modules from. Defaults to "main".</summary>
+    [JsonPropertyName("modules_branch")]
+    public string ModulesBranch { get; set; } = "main";
+
+    /// <summary>Pull modules from DaisiGit on startup.</summary>
+    [JsonPropertyName("pull_modules")]
+    public bool PullModules { get; set; }
+
     [JsonPropertyName("models")]
     public List<ModelEntry> Models { get; set; } = [];
 }
