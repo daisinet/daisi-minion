@@ -169,6 +169,7 @@ public abstract class MinionBase : IDisposable
         ToolRegistry.Register(new SendMessageTool(Pool));
         ToolRegistry.Register(new StopMinionTool(Pool));
         ToolRegistry.Register(new ListMinionsTool(Pool));
+        ToolRegistry.Register(new EvaluateMinionTool(Pool));
 
         InferenceLog.Log("Orchestration tools registered (summoner mode)");
     }

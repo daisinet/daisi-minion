@@ -1,10 +1,13 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using System.Threading.Channels;
+using Daisi.Minion.Benchmarks;
 using Daisi.Minion.Coding;
 using Daisi.Minion.Coding.Tools;
 using Daisi.Minion.Config;
 using Daisi.Minion.Engine;
+using Daisi.Minion.Modules;
 using Daisi.Minion.Types;
 using Daisi.Llogos.Chat;
 using Daisi.Llogos.Inference;
@@ -103,6 +106,7 @@ public sealed class MinionPool : IAsyncDisposable
 
         child.Status = ChildMinionStatus.Working;
         child.LastActivity = DateTime.UtcNow;
+        child.Stopwatch.Start();
 
         var profile = GetGenerationParams();
         var toolFmt = MinionToolFormatter.Instance;
@@ -125,6 +129,13 @@ public sealed class MinionPool : IAsyncDisposable
                     var result = await child.ToolRegistry.ExecuteAsync(call, ct);
                     child.Conversation.AddToolResult(call.Name, result.Output);
                     child.ToolCallCount++;
+
+                    // Track file modifications for evaluation
+                    if (call.Name is "file_write" or "file_edit")
+                    {
+                        var path = call.Arguments["path"]?.ToString();
+                        if (path != null) child.FilesModified.Add(path);
+                    }
                 }
 
                 response = await StreamToString(
@@ -150,6 +161,7 @@ public sealed class MinionPool : IAsyncDisposable
         }
         finally
         {
+            child.Stopwatch.Stop();
             _inferenceLock.Release();
         }
     }
@@ -255,6 +267,43 @@ public sealed class ChildMinion
     public string? LastResponse { get; set; }
     public int IterationCount { get; set; }
     public int ToolCallCount { get; set; }
+
+    // ── Evaluation metrics ──
+
+    /// <summary>Names of modules that were active when this minion was spawned.</summary>
+    public List<string> ActiveModules { get; init; } = [];
+
+    /// <summary>Total tokens generated across all iterations.</summary>
+    public int TotalTokens { get; set; }
+
+    /// <summary>Stopwatch tracking total working time.</summary>
+    public Stopwatch Stopwatch { get; } = new();
+
+    /// <summary>Files this minion modified (for verification).</summary>
+    public List<string> FilesModified { get; } = [];
+
+    /// <summary>Summoner's evaluation score (set by evaluate_minion tool).</summary>
+    public double? EvaluationScore { get; set; }
+
+    /// <summary>Summoner's evaluation notes.</summary>
+    public string? EvaluationNotes { get; set; }
+
+    /// <summary>Build a TaskOutcome from this minion's metrics.</summary>
+    public TaskOutcome BuildOutcome() => new()
+    {
+        Succeeded = Status == ChildMinionStatus.Complete,
+        IterationsUsed = IterationCount,
+        IterationBudget = 20,
+        ToolCalls = ToolCallCount,
+        TotalTokens = TotalTokens,
+        Duration = Stopwatch.Elapsed,
+        FilesModified = this.FilesModified.Count,
+        WasStopped = Status == ChildMinionStatus.Stopped,
+        TaskDescription = Task,
+        MinionType = TypeName,
+        SelfScore = EvaluationScore ?? 0,
+        SelfNotes = EvaluationNotes,
+    };
 }
 
 public enum ChildMinionStatus
