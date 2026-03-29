@@ -190,7 +190,9 @@ public abstract class MinionBase : IDisposable
         ToolRegistry.Register(new ReadModuleTool(evolver));
         ToolRegistry.Register(new CommitModuleTool(evolver));
         ToolRegistry.Register(new ListModulesTool(evolver));
+        ToolRegistry.Register(new StartEvolutionRunTool(ConfigManager));
         ToolRegistry.Register(new PushModuleTool(ConfigManager));
+        ToolRegistry.Register(new SubmitEvolutionPrTool(ConfigManager));
 
         InferenceLog.Log("Evolution tools registered (darwin mode)");
     }

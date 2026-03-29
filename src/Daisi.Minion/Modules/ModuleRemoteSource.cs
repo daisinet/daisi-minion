@@ -3,9 +3,14 @@ using DaisiGit.SDK;
 namespace Daisi.Minion.Modules;
 
 /// <summary>
-/// Pulls modules from a DaisiGit repository (typically a fork).
-/// Each top-level directory in the repo that contains a module.cs is a module.
-/// Downloaded modules are cached to ~/.daisi-minion/modules/ so they work offline.
+/// Pulls and pushes modules to/from a DaisiGit repository via the REST API.
+/// No local git clone needed — all operations are pure HTTP.
+///
+/// Branching model:
+/// - Pull reads from the configured branch (default: main)
+/// - Darwin creates a run branch (darwin/{minion-name}/{date}) for evolution
+/// - Evolved modules are committed to the run branch via the contents API
+/// - Darwin PRs the run branch back to main when scoring is good
 /// </summary>
 public sealed class ModuleRemoteSource : IDisposable
 {
@@ -16,15 +21,6 @@ public sealed class ModuleRemoteSource : IDisposable
     private readonly string _localModulesDir;
     private readonly Action<string> _log;
 
-    /// <summary>
-    /// Create a remote module source.
-    /// </summary>
-    /// <param name="serverUrl">DaisiGit server URL (e.g., https://git.daisi.ai)</param>
-    /// <param name="apiKey">API key (dg_...) for authentication</param>
-    /// <param name="modulesRepo">Repository as "owner/slug"</param>
-    /// <param name="branch">Branch to pull from (default: main)</param>
-    /// <param name="localModulesDir">Local cache directory for modules</param>
-    /// <param name="log">Logging callback</param>
     public ModuleRemoteSource(
         string serverUrl, string apiKey, string modulesRepo,
         string branch = "main", string? localModulesDir = null, Action<string>? log = null)
@@ -39,10 +35,8 @@ public sealed class ModuleRemoteSource : IDisposable
         _log = log ?? (_ => { });
     }
 
-    /// <summary>
-    /// Pull all modules from the remote repo to local cache.
-    /// Returns the number of modules updated.
-    /// </summary>
+    // ── Pull (read modules from remote → local cache) ──
+
     public async Task<int> PullAsync(CancellationToken ct = default)
     {
         _log($"Pulling modules from {_owner}/{_slug}@{_branch}...");
@@ -63,63 +57,35 @@ public sealed class ModuleRemoteSource : IDisposable
 
         foreach (var entry in tree.Entries)
         {
-            // Only directories (mode "040000" = tree)
             if (entry.Mode != "040000") continue;
+            if (entry.Name is "reference" or "tests") continue;
 
             ct.ThrowIfCancellationRequested();
-
             var moduleName = entry.Name;
-            var remoteModulePath = $"{moduleName}/module.cs";
 
             try
             {
-                var file = await _client.GetFileAsync(_owner, _slug, remoteModulePath, _branch);
+                var file = await _client.GetFileAsync(_owner, _slug, $"{moduleName}/module.cs", _branch);
+                if (file.IsBinary || string.IsNullOrEmpty(file.Text)) continue;
 
-                if (file.IsBinary || string.IsNullOrEmpty(file.Text))
-                {
-                    _log($"  Skipping {moduleName}: not a text file");
-                    continue;
-                }
-
-                // Check if local copy is already current (compare by content hash)
                 var localDir = Path.Combine(_localModulesDir, moduleName);
                 var localPath = Path.Combine(localDir, "module.cs");
 
-                if (File.Exists(localPath))
+                if (File.Exists(localPath) && await File.ReadAllTextAsync(localPath, ct) == file.Text)
                 {
-                    var localContent = await File.ReadAllTextAsync(localPath, ct);
-                    if (localContent == file.Text)
-                    {
-                        _log($"  {moduleName}: up to date");
-                        continue;
-                    }
+                    _log($"  {moduleName}: up to date");
+                    continue;
                 }
 
-                // Write updated module
                 Directory.CreateDirectory(localDir);
                 await File.WriteAllTextAsync(localPath, file.Text, ct);
-
-                // Also pull tests.cs if it exists
                 await TryPullFileAsync(moduleName, "tests.cs", localDir, ct);
-
-                // Store remote metadata for push-back
-                var metaPath = Path.Combine(localDir, ".remote.json");
-                var meta = System.Text.Json.JsonSerializer.Serialize(new
-                {
-                    server = $"{_client}",
-                    repo = $"{_owner}/{_slug}",
-                    branch = _branch,
-                    sha = file.Sha,
-                    pulledUtc = DateTime.UtcNow,
-                });
-                await File.WriteAllTextAsync(metaPath, meta, ct);
 
                 _log($"  {moduleName}: updated (sha={file.Sha[..7]})");
                 updated++;
             }
             catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
-                // Directory exists but no module.cs — skip
                 continue;
             }
             catch (Exception ex)
@@ -132,38 +98,60 @@ public sealed class ModuleRemoteSource : IDisposable
         return updated;
     }
 
+    // ── Push (commit modules to remote via contents API) ──
+
     /// <summary>
-    /// Push a local module back to the remote repo (for Darwin evolution).
-    /// Creates or updates the module.cs file in the repo via API.
+    /// Create a Darwin evolution branch. Returns the branch name.
     /// </summary>
-    public async Task PushModuleAsync(string moduleName, CancellationToken ct = default)
+    public async Task<string> CreateDarwinBranchAsync(string minionName, CancellationToken ct = default)
     {
-        var localPath = Path.Combine(_localModulesDir, moduleName, "module.cs");
-        if (!File.Exists(localPath))
-            throw new FileNotFoundException($"Module not found: {localPath}");
+        var branchName = $"darwin/{minionName}/{DateTime.UtcNow:yyyyMMdd-HHmmss}";
+        _log($"Creating branch: {branchName} from {_branch}...");
 
-        var content = await File.ReadAllTextAsync(localPath, ct);
-        var remotePath = $"{moduleName}/module.cs";
+        await _client.CreateBranchAsync(_owner, _slug, branchName, _branch);
 
-        _log($"Pushing {moduleName} to {_owner}/{_slug}@{_branch}...");
+        _log($"  Created branch: {branchName}");
+        return branchName;
+    }
 
-        // Use the commit API to create/update the file
-        // The DaisiGit API endpoint for file writes is:
-        // POST /api/git/repos/{owner}/{slug}/contents/{path}
-        // with { content, branch, message }
-        // For now, we'll use the SDK's HTTP client directly
-        await CommitFileAsync(remotePath, content, $"Update module: {moduleName}", ct);
+    /// <summary>
+    /// Push a module to a branch by committing its files via the contents API.
+    /// </summary>
+    public async Task PushModuleAsync(string moduleName, string? branch = null, CancellationToken ct = default)
+    {
+        var localModuleDir = Path.Combine(_localModulesDir, moduleName);
+        var localModulePath = Path.Combine(localModuleDir, "module.cs");
+        if (!File.Exists(localModulePath))
+            throw new FileNotFoundException($"Module not found: {localModulePath}");
 
-        // Also push tests.cs if it exists
-        var testsPath = Path.Combine(_localModulesDir, moduleName, "tests.cs");
+        var targetBranch = branch ?? _branch;
+        _log($"Pushing {moduleName} to {_owner}/{_slug}@{targetBranch}...");
+
+        // Commit module.cs
+        var moduleContent = await File.ReadAllTextAsync(localModulePath, ct);
+        await _client.WriteFileAsync(_owner, _slug, $"{moduleName}/module.cs",
+            moduleContent, $"Evolve module: {moduleName}", targetBranch);
+
+        // Commit tests.cs if it exists
+        var testsPath = Path.Combine(localModuleDir, "tests.cs");
         if (File.Exists(testsPath))
         {
             var testsContent = await File.ReadAllTextAsync(testsPath, ct);
-            await CommitFileAsync($"{moduleName}/tests.cs", testsContent,
-                $"Update tests for module: {moduleName}", ct);
+            await _client.WriteFileAsync(_owner, _slug, $"{moduleName}/tests.cs",
+                testsContent, $"Update tests for: {moduleName}", targetBranch);
         }
 
         _log($"  Pushed {moduleName}");
+    }
+
+    /// <summary>
+    /// Create a pull request from a Darwin branch back to main.
+    /// </summary>
+    public async Task<int> CreatePullRequestAsync(string sourceBranch, string title, string? description = null, CancellationToken ct = default)
+    {
+        var pr = await _client.CreatePullRequestAsync(_owner, _slug, title, sourceBranch, _branch, description);
+        _log($"Created PR #{pr.Number}: {title}");
+        return pr.Number;
     }
 
     /// <summary>
@@ -172,16 +160,13 @@ public sealed class ModuleRemoteSource : IDisposable
     public async Task<List<string>> ListRemoteModulesAsync(CancellationToken ct = default)
     {
         var tree = await _client.GetTreeAsync(_owner, _slug, _branch);
-        var modules = new List<string>();
-
-        foreach (var entry in tree.Entries)
-        {
-            if (entry.Mode == "040000") // directory
-                modules.Add(entry.Name);
-        }
-
-        return modules;
+        return tree.Entries
+            .Where(e => e.Mode == "040000" && e.Name is not "reference" and not "tests")
+            .Select(e => e.Name)
+            .ToList();
     }
+
+    // ── Helpers ──
 
     private async Task TryPullFileAsync(string moduleName, string fileName, string localDir, CancellationToken ct)
     {
@@ -191,16 +176,7 @@ public sealed class ModuleRemoteSource : IDisposable
             if (!file.IsBinary && !string.IsNullOrEmpty(file.Text))
                 await File.WriteAllTextAsync(Path.Combine(localDir, fileName), file.Text, ct);
         }
-        catch { } // Optional file — ignore errors
-    }
-
-    private async Task CommitFileAsync(string path, string content, string message, CancellationToken ct)
-    {
-        // TODO: The DaisiGit API needs a file-write/commit endpoint.
-        // For now, this is a placeholder that will be wired up when the
-        // API supports single-file commits (or we use git push via smart HTTP).
-        _log($"  [commit] {path}: {message}");
-        await Task.CompletedTask;
+        catch { }
     }
 
     public void Dispose() => _client.Dispose();

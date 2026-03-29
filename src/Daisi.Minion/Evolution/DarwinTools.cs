@@ -226,14 +226,59 @@ public sealed class ListModulesTool : IMinionTool
     }
 }
 
-/// <summary>Push an evolved module to the minion's DaisiGit fork.</summary>
+/// <summary>
+/// Start a Darwin evolution run — creates a branch on the remote fork.
+/// All subsequent push_module calls go to this branch.
+/// </summary>
+public sealed class StartEvolutionRunTool : IMinionTool
+{
+    private readonly ConfigManager _configManager;
+    public StartEvolutionRunTool(ConfigManager configManager) => _configManager = configManager;
+
+    public string Name => "start_evolution_run";
+    public string Description => "Create a new Darwin branch on the remote fork for this evolution session. Returns the branch name. Call this before push_module.";
+
+    public JsonObject ParametersSchema => new()
+    {
+        ["type"] = "object",
+        ["properties"] = new JsonObject(),
+    };
+
+    public async Task<ToolResult> ExecuteAsync(JsonObject arguments, CancellationToken ct)
+    {
+        var config = _configManager.Config;
+        if (string.IsNullOrEmpty(config.DaisiGitServer) || string.IsNullOrEmpty(config.DaisiGitToken)
+            || string.IsNullOrEmpty(config.ModulesRepo))
+            return ToolResult.Error("DaisiGit not configured.");
+
+        try
+        {
+            using var source = CreateSource(config);
+            var branch = await source.CreateDarwinBranchAsync(config.MinionName, ct);
+
+            // Store the active branch for push_module to use
+            _configManager.Config.ModulesBranch = branch;
+
+            return ToolResult.Success($"Created evolution branch: {branch}\nAll push_module calls will target this branch.");
+        }
+        catch (Exception ex)
+        {
+            return ToolResult.Error($"Failed: {ex.Message}");
+        }
+    }
+
+    private static ModuleRemoteSource CreateSource(Config.MinionConfig config) =>
+        new(config.DaisiGitServer!, config.DaisiGitToken!, config.ModulesRepo!, config.ModulesBranch);
+}
+
+/// <summary>Push an evolved module to the current Darwin branch on the fork.</summary>
 public sealed class PushModuleTool : IMinionTool
 {
     private readonly ConfigManager _configManager;
     public PushModuleTool(ConfigManager configManager) => _configManager = configManager;
 
     public string Name => "push_module";
-    public string Description => "Push a committed module to the remote DaisiGit fork. The module must already be committed locally.";
+    public string Description => "Push a committed module to the remote DaisiGit fork. Call start_evolution_run first to create a branch.";
 
     public JsonObject ParametersSchema => new()
     {
@@ -251,10 +296,9 @@ public sealed class PushModuleTool : IMinionTool
         if (string.IsNullOrEmpty(name)) return ToolResult.Error("Missing: name");
 
         var config = _configManager.Config;
-        if (string.IsNullOrEmpty(config.DaisiGitServer) || string.IsNullOrEmpty(config.DaisiGitToken))
-            return ToolResult.Error("DaisiGit not configured. Set daisigit_server and daisigit_token in config.");
-        if (string.IsNullOrEmpty(config.ModulesRepo))
-            return ToolResult.Error("No modules_repo configured.");
+        if (string.IsNullOrEmpty(config.DaisiGitServer) || string.IsNullOrEmpty(config.DaisiGitToken)
+            || string.IsNullOrEmpty(config.ModulesRepo))
+            return ToolResult.Error("DaisiGit not configured.");
 
         try
         {
@@ -262,12 +306,61 @@ public sealed class PushModuleTool : IMinionTool
                 config.DaisiGitServer, config.DaisiGitToken, config.ModulesRepo,
                 config.ModulesBranch);
 
-            await source.PushModuleAsync(name, ct);
-            return ToolResult.Success($"Pushed module '{name}' to {config.ModulesRepo}@{config.ModulesBranch}");
+            await source.PushModuleAsync(name, config.ModulesBranch, ct);
+            return ToolResult.Success($"Pushed '{name}' to {config.ModulesRepo}@{config.ModulesBranch}");
         }
         catch (Exception ex)
         {
             return ToolResult.Error($"Push failed: {ex.Message}");
+        }
+    }
+}
+
+/// <summary>Create a PR from the Darwin branch back to main for review/merge.</summary>
+public sealed class SubmitEvolutionPrTool : IMinionTool
+{
+    private readonly ConfigManager _configManager;
+    public SubmitEvolutionPrTool(ConfigManager configManager) => _configManager = configManager;
+
+    public string Name => "submit_evolution_pr";
+    public string Description => "Create a pull request from the current Darwin branch back to main. Call after pushing evolved modules.";
+
+    public JsonObject ParametersSchema => new()
+    {
+        ["type"] = "object",
+        ["properties"] = new JsonObject
+        {
+            ["title"] = new JsonObject { ["type"] = "string", ["description"] = "PR title summarizing the evolution" },
+            ["description"] = new JsonObject { ["type"] = "string", ["description"] = "What changed and why" },
+        },
+        ["required"] = new JsonArray("title"),
+    };
+
+    public async Task<ToolResult> ExecuteAsync(JsonObject arguments, CancellationToken ct)
+    {
+        var title = ToolArgs.GetString(arguments, "title");
+        var desc = ToolArgs.GetString(arguments, "description");
+        if (string.IsNullOrEmpty(title)) return ToolResult.Error("Missing: title");
+
+        var config = _configManager.Config;
+        if (string.IsNullOrEmpty(config.DaisiGitServer) || string.IsNullOrEmpty(config.DaisiGitToken)
+            || string.IsNullOrEmpty(config.ModulesRepo))
+            return ToolResult.Error("DaisiGit not configured.");
+
+        if (!config.ModulesBranch.StartsWith("darwin/"))
+            return ToolResult.Error("Not on a Darwin branch. Call start_evolution_run first.");
+
+        try
+        {
+            using var source = new ModuleRemoteSource(
+                config.DaisiGitServer, config.DaisiGitToken, config.ModulesRepo, "main");
+
+            var prNumber = await source.CreatePullRequestAsync(config.ModulesBranch, title, desc, ct);
+            return ToolResult.Success($"Created PR #{prNumber}: {title}\nBranch {config.ModulesBranch} → main");
+        }
+        catch (Exception ex)
+        {
+            return ToolResult.Error($"PR failed: {ex.Message}");
         }
     }
 }
