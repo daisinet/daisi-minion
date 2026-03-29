@@ -67,7 +67,6 @@ public sealed class EvaluateModuleTool : IMinionTool
         report.AppendLine();
 
         // Step 2: Run tests
-        bool testsPassed = true;
         if (!string.IsNullOrEmpty(testSource))
         {
             var testResult = _testRunner.RunTests(moduleSource, testSource);
@@ -78,7 +77,6 @@ public sealed class EvaluateModuleTool : IMinionTool
 
             if (!testResult.Success)
             {
-                testsPassed = false;
                 report.AppendLine("**Verdict: REJECT** — tests failed.");
                 return Task.FromResult(ToolResult.Error(report.ToString()));
             }
