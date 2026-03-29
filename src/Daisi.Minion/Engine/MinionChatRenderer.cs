@@ -12,15 +12,22 @@ namespace Daisi.Minion.Engine;
 public sealed class MinionChatRenderer : IChatRenderer
 {
     private readonly IReadOnlyList<ToolDefinition> _tools;
+    private readonly bool _grammarMode;
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = false };
 
-    public MinionChatRenderer(IReadOnlyList<ToolDefinition> tools)
+    /// <param name="tools">Available tool definitions.</param>
+    /// <param name="grammarMode">When true, omits the tool-call instruction preamble
+    /// and the &lt;/tool_call&gt; stop sequence — the grammar handles structure instead.</param>
+    public MinionChatRenderer(IReadOnlyList<ToolDefinition> tools, bool grammarMode = false)
     {
         _tools = tools;
+        _grammarMode = grammarMode;
     }
 
-    public string[] GetStopSequences() => ["<|im_end|>", "</tool_call>"];
+    public string[] GetStopSequences() => _grammarMode
+        ? ["<|im_end|>"]
+        : ["<|im_end|>", "</tool_call>"];
 
     public string Render(IReadOnlyList<ChatMessage> messages, bool addGenerationPrompt = true)
     {
@@ -51,10 +58,18 @@ public sealed class MinionChatRenderer : IChatRenderer
             }
             sb.Append("</tools>\n\n");
 
-            sb.Append("To call a function, respond with a JSON object inside <tool_call> tags:\n\n");
-            sb.Append("<tool_call>\n{\"name\": \"function_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n\n");
-            sb.Append("When asked to create, edit, or build something, respond with a tool_call immediately.\n");
-            sb.Append("Do not describe what you plan to do — call the tool.\n");
+            if (_grammarMode)
+            {
+                sb.Append("IMPORTANT: Do not use <think> or <response> tags. Respond with raw JSON only.\n");
+                sb.Append("When asked to create, edit, or build something, respond with the tool call JSON immediately.\n");
+            }
+            else
+            {
+                sb.Append("To call a function, respond with a JSON object inside <tool_call> tags:\n\n");
+                sb.Append("<tool_call>\n{\"name\": \"function_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n\n");
+                sb.Append("When asked to create, edit, or build something, respond with a tool_call immediately.\n");
+                sb.Append("Do not describe what you plan to do — call the tool.\n");
+            }
 
             sb.Append("<|im_end|>\n");
         }

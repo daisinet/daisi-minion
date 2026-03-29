@@ -219,6 +219,11 @@ public abstract class MinionBase : IDisposable
         var systemPrompt = BuildSystemPrompt();
         var toolDefs = ToolRegistry.GetToolDefinitions();
         Conversation = new ConversationManager(systemPrompt, toolDefs);
+
+        // Enable grammar-constrained tool calling if configured
+        if (ConfigManager.Config.UseGrammarToolCalls)
+            Conversation.EnableGrammarMode();
+
         Conversation.Initialize(ModelHandle);
     }
 
@@ -261,6 +266,15 @@ public abstract class MinionBase : IDisposable
             var toolCalls = toolFmt.ParseToolCalls(fullResponse);
             if (toolCalls.Count == 0) break;
 
+            // Check for "complete" signal tool
+            var completeTool = toolCalls.FirstOrDefault(c => c.Name == "complete");
+            if (completeTool != null)
+            {
+                var summary = completeTool.Arguments["summary"]?.ToString() ?? "done";
+                ReportInfo($"GOAL_COMPLETE: {summary}");
+                return $"GOAL_COMPLETE {summary}";
+            }
+
             for (int i = 0; i < toolCalls.Count; i++)
             {
                 var call = toolCalls[i];
@@ -294,7 +308,7 @@ public abstract class MinionBase : IDisposable
             Your goal: {goal}
 
             Call tools immediately to accomplish this goal. Do not explain what you plan to do — just call the tool.
-            When done, respond with GOAL_COMPLETE and a brief summary.
+            When done, call the "complete" tool with a brief summary in the "summary" argument.
             """;
 
         for (int iteration = 1; iteration <= maxIterations; iteration++)
@@ -305,7 +319,7 @@ public abstract class MinionBase : IDisposable
 
             var message = iteration == 1
                 ? goalPrompt
-                : "You have not completed the goal yet. Call a tool now to make progress. If the goal is complete, respond with GOAL_COMPLETE.";
+                : "Continue working on the goal. Call a tool to make progress. When done, call the \"complete\" tool.";
 
             var fullResponse = await RunAgenticStepAsync(message, ct);
 

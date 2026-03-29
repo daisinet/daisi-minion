@@ -51,6 +51,10 @@ public sealed class MinionConfig
     [JsonPropertyName("kv_quant")]
     public string? KvQuant { get; set; }
 
+    /// <summary>Use GBNF grammar to constrain tool call output to valid JSON. Eliminates malformed tool calls.</summary>
+    [JsonPropertyName("grammar_tool_calls")]
+    public bool UseGrammarToolCalls { get; set; }
+
     [JsonPropertyName("models")]
     public List<ModelEntry> Models { get; set; } = [];
 }

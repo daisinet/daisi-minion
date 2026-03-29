@@ -74,6 +74,9 @@ public sealed class CliRunner : MinionBase
                 case "--json":
                     _jsonOutput = true;
                     break;
+                case "--grammar":
+                    ConfigManager.Config.UseGrammarToolCalls = true;
+                    break;
             }
         }
     }
