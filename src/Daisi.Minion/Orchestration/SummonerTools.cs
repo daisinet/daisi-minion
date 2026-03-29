@@ -12,7 +12,7 @@ public sealed class SpawnMinionTool : IMinionTool
     public SpawnMinionTool(MinionPool pool) => _pool = pool;
 
     public string Name => "spawn_minion";
-    public string Description => "Spawn a new worker minion. Types: code, test, research. Returns the minion's ID.";
+    public string Description => "Spawn a new worker minion. Types: code, test, research. Always include acceptance_criteria so the minion knows what 'done well' looks like.";
 
     public JsonObject ParametersSchema => new()
     {
@@ -21,6 +21,7 @@ public sealed class SpawnMinionTool : IMinionTool
         {
             ["minion_type"] = new JsonObject { ["type"] = "string", ["description"] = "Type of minion: code, test, research" },
             ["task"] = new JsonObject { ["type"] = "string", ["description"] = "Clear, specific task description for the minion" },
+            ["acceptance_criteria"] = new JsonObject { ["type"] = "string", ["description"] = "Checklist of criteria the minion must meet. One per line. e.g.:\n- Code compiles without errors\n- Unit test exists and passes\n- No hardcoded paths" },
         },
         ["required"] = new JsonArray("minion_type", "task"),
     };
@@ -29,6 +30,7 @@ public sealed class SpawnMinionTool : IMinionTool
     {
         var typeName = ToolArgs.GetString(arguments, "minion_type");
         var task = ToolArgs.GetString(arguments, "task");
+        var criteria = ToolArgs.GetString(arguments, "acceptance_criteria");
 
         if (string.IsNullOrEmpty(typeName))
             return Task.FromResult(ToolResult.Error("Missing required parameter: minion_type"));
@@ -37,7 +39,7 @@ public sealed class SpawnMinionTool : IMinionTool
 
         try
         {
-            var id = _pool.Spawn(typeName, task);
+            var id = _pool.Spawn(typeName, task, criteria);
             return Task.FromResult(ToolResult.Success($"Spawned {id}. Task: {task}"));
         }
         catch (Exception ex)
@@ -81,8 +83,12 @@ public sealed class CheckMinionTool : IMinionTool
         sb.AppendLine($"Type: {child.TypeName}");
         sb.AppendLine($"Status: {child.Status}");
         sb.AppendLine($"Task: {child.Task}");
+        if (child.AcceptanceCriteria != null)
+            sb.AppendLine($"Acceptance criteria:\n{child.AcceptanceCriteria}");
         sb.AppendLine($"Iterations: {child.IterationCount}");
         sb.AppendLine($"Tool calls: {child.ToolCallCount}");
+        sb.AppendLine($"Files modified: {child.FilesModified.Count}");
+        sb.AppendLine($"Duration: {child.Stopwatch.Elapsed.TotalSeconds:F1}s");
         if (child.LastResponse != null)
         {
             var response = child.LastResponse.Length > 500

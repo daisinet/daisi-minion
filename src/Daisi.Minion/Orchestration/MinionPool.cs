@@ -40,7 +40,7 @@ public sealed class MinionPool : IAsyncDisposable
     /// <summary>
     /// Spawn a new child minion with a specific type and task.
     /// </summary>
-    public string Spawn(string typeName, string task, string? workingDirectory = null)
+    public string Spawn(string typeName, string task, string? acceptanceCriteria = null, string? workingDirectory = null)
     {
         // Validate type first so callers get a clear error for bad type names
         var typeConfig = MinionTypeFactory.Get(typeName);
@@ -73,7 +73,7 @@ public sealed class MinionPool : IAsyncDisposable
         }
 
         // Build system prompt
-        var systemPrompt = BuildChildSystemPrompt(id, typeConfig, task, childWorkDir);
+        var systemPrompt = BuildChildSystemPrompt(id, typeConfig, task, childWorkDir, acceptanceCriteria);
 
         // Create conversation with shared model
         var toolDefs = toolRegistry.GetToolDefinitions();
@@ -85,6 +85,7 @@ public sealed class MinionPool : IAsyncDisposable
             Id = id,
             TypeName = typeName,
             Task = task,
+            AcceptanceCriteria = acceptanceCriteria,
             Status = ChildMinionStatus.Idle,
             ToolRegistry = toolRegistry,
             Conversation = conversation,
@@ -204,7 +205,7 @@ public sealed class MinionPool : IAsyncDisposable
         return sb.ToString();
     }
 
-    private static string BuildChildSystemPrompt(string id, MinionTypeConfig typeConfig, string task, string workDir)
+    private static string BuildChildSystemPrompt(string id, MinionTypeConfig typeConfig, string task, string workDir, string? acceptanceCriteria = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"You are {id}, a {typeConfig.Name} minion worker.");
@@ -215,7 +216,14 @@ public sealed class MinionPool : IAsyncDisposable
             sb.AppendLine(typeConfig.SystemPromptExtension);
             sb.AppendLine();
         }
-        sb.AppendLine("When your task is complete, include TASK_COMPLETE in your response.");
+        if (!string.IsNullOrEmpty(acceptanceCriteria))
+        {
+            sb.AppendLine("# Acceptance Criteria");
+            sb.AppendLine("Your work will be evaluated against these criteria. Meet ALL of them before declaring complete:");
+            sb.AppendLine(acceptanceCriteria);
+            sb.AppendLine();
+        }
+        sb.AppendLine("When your task is complete and all acceptance criteria are met, include TASK_COMPLETE in your response.");
         sb.AppendLine("If you're stuck, clearly explain what's blocking you.");
         return sb.ToString();
     }
@@ -259,6 +267,7 @@ public sealed class ChildMinion
     public required string Id { get; init; }
     public required string TypeName { get; init; }
     public required string Task { get; init; }
+    public string? AcceptanceCriteria { get; init; }
     public ChildMinionStatus Status { get; set; }
     public required CodingToolRegistry ToolRegistry { get; init; }
     public required ConversationManager Conversation { get; init; }
