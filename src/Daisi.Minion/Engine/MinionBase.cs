@@ -22,6 +22,12 @@ public abstract class MinionBase : IDisposable
 {
     protected readonly ConfigManager ConfigManager;
     protected readonly CodingToolRegistry ToolRegistry = new();
+
+    /// <summary>Wire up validation logging after construction.</summary>
+    protected void InitializeValidationLogging()
+    {
+        ToolRegistry.OnValidationEvent = msg => ReportInfo(msg);
+    }
     protected readonly ProjectContext ProjectContext;
     protected readonly RoleManager Roles = new();
     protected readonly PersonaManager Personas = new();
@@ -53,6 +59,7 @@ public abstract class MinionBase : IDisposable
         Sandbox = new ToolSandbox(workDir);
         ProjectContext = new ProjectContext(workDir);
         RegisterBaseTools();
+        InitializeValidationLogging();
         LoadModules();
     }
 

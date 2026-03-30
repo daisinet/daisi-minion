@@ -10,6 +10,9 @@ public sealed class CodingToolRegistry
     private readonly Dictionary<string, IMinionTool> _tools = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _sealedTools = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Optional callback for logging validation events (coercions, errors).</summary>
+    public Action<string>? OnValidationEvent { get; set; }
+
     public IReadOnlyDictionary<string, IMinionTool> Tools => _tools;
 
     /// <summary>
@@ -58,6 +61,9 @@ public sealed class CodingToolRegistry
                 var coercions = ToolCallValidator.CoerceTypes(call.Arguments, tool.ParametersSchema);
                 if (coercions.Count > 0)
                 {
+                    foreach (var c in coercions)
+                        OnValidationEvent?.Invoke($"[validation] {call.Name}: {c}");
+
                     // Re-validate after coercion
                     var recheck = ToolCallValidator.Validate(call.Arguments, tool.ParametersSchema);
                     if (recheck == null)
@@ -68,6 +74,7 @@ public sealed class CodingToolRegistry
                     }
                 }
             }
+            OnValidationEvent?.Invoke($"[validation] {call.Name}: REJECTED — {validationError}");
             return ToolResult.Error(validationError);
         }
 
