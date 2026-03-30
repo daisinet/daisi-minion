@@ -90,12 +90,31 @@ public sealed class CheckMinionTool : IMinionTool
         sb.AppendLine($"Tool calls: {child.ToolCallCount}");
         sb.AppendLine($"Files modified: {child.FilesModified.Count}");
         sb.AppendLine($"Duration: {child.Stopwatch.Elapsed.TotalSeconds:F1}s");
+
+        // Show file content previews for completed minions so summoner can verify quality
+        if (child.Status == ChildMinionStatus.Complete && child.FilesModified.Count > 0)
+        {
+            sb.AppendLine("\n--- Files Created ---");
+            foreach (var filePath in child.FilesModified.Distinct().Take(5))
+            {
+                if (!File.Exists(filePath)) continue;
+                try
+                {
+                    var content = File.ReadAllText(filePath);
+                    var preview = content.Length > 800 ? content[..800] + "\n... (truncated)" : content;
+                    sb.AppendLine($"\n=== {Path.GetFileName(filePath)} ({content.Length} bytes) ===");
+                    sb.AppendLine(preview);
+                }
+                catch { }
+            }
+        }
+
         if (child.LastResponse != null)
         {
             var response = child.LastResponse.Length > 500
                 ? child.LastResponse[..500] + "..."
                 : child.LastResponse;
-            sb.AppendLine($"Last response: {response}");
+            sb.AppendLine($"\nLast response: {response}");
         }
 
         return Task.FromResult(ToolResult.Success(sb.ToString()));
