@@ -57,7 +57,9 @@ public sealed class ModuleRemoteSource : IDisposable
 
         foreach (var entry in tree.Entries)
         {
-            if (entry.Mode != "040000") continue;
+            _log($"  entry: mode={entry.Mode} name={entry.Name}");
+            // Tree entries: git uses "40000" for directories, some APIs zero-pad to "040000"
+            if (!entry.Mode.EndsWith("40000")) continue;
             if (entry.Name is "reference" or "tests") continue;
 
             ct.ThrowIfCancellationRequested();
@@ -65,6 +67,13 @@ public sealed class ModuleRemoteSource : IDisposable
 
             try
             {
+                // Browse into the module directory to find module.cs
+                // (workaround: blob endpoint doesn't support nested paths on some DaisiGit versions)
+                var subTree = await _client.GetTreeAsync(_owner, _slug, _branch, moduleName);
+                var moduleEntry = subTree.Entries.FirstOrDefault(e => e.Name == "module.cs");
+                if (moduleEntry == null) continue;
+
+                // Fetch the file using the tree path (which works with nested paths)
                 var file = await _client.GetFileAsync(_owner, _slug, $"{moduleName}/module.cs", _branch);
                 if (file.IsBinary || string.IsNullOrEmpty(file.Text)) continue;
 
@@ -161,7 +170,7 @@ public sealed class ModuleRemoteSource : IDisposable
     {
         var tree = await _client.GetTreeAsync(_owner, _slug, _branch);
         return tree.Entries
-            .Where(e => e.Mode == "040000" && e.Name is not "reference" and not "tests")
+            .Where(e => e.Mode is "040000" or "40000" && e.Name is not "reference" and not "tests")
             .Select(e => e.Name)
             .ToList();
     }
