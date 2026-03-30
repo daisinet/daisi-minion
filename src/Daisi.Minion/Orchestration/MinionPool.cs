@@ -228,6 +228,7 @@ public sealed class MinionPool : IAsyncDisposable
             sb.AppendLine(acceptanceCriteria);
             sb.AppendLine();
         }
+        sb.AppendLine("IMPORTANT: Write ONE file per tool call. Do not try to write multiple files in a single response.");
         sb.AppendLine("When your task is complete and all acceptance criteria are met, include TASK_COMPLETE in your response.");
         sb.AppendLine("If you're stuck, clearly explain what's blocking you.");
         return sb.ToString();
@@ -237,9 +238,11 @@ public sealed class MinionPool : IAsyncDisposable
     {
         var modelPath = _configManager.Config.ActiveModel;
         var profile = !string.IsNullOrEmpty(modelPath) ? ModelProfile.Load(modelPath) : null;
+        // Child minions get 2x token budget — they write full file content in tool calls
+        var baseTokens = profile?.MaxTokens ?? _configManager.Config.MaxTokens;
         return new GenerationParams
         {
-            MaxTokens = profile?.MaxTokens ?? _configManager.Config.MaxTokens,
+            MaxTokens = Math.Max(baseTokens, 8192),
             Temperature = profile?.Temperature ?? _configManager.Config.Temperature,
             TopK = profile?.TopK ?? 40,
             TopP = profile?.TopP ?? 0.9f,

@@ -25,7 +25,8 @@ public sealed class FileWriteTool : IMinionTool
     public async Task<ToolResult> ExecuteAsync(JsonObject arguments, CancellationToken ct)
     {
         var path = arguments["path"]?.GetValue<string>();
-        var content = arguments["content"]?.GetValue<string>();
+        var content = arguments["content"]?.GetValue<string>()
+            ?? arguments["file_content"]?.GetValue<string>(); // alias: models sometimes use file_content
 
         if (string.IsNullOrEmpty(path))
             return ToolResult.Error("Missing required parameter: path");

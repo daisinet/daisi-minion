@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Daisi.Minion.Coding;
+using Daisi.Minion.Engine;
 
 namespace Daisi.Minion.Orchestration;
 
@@ -135,7 +136,14 @@ public sealed class SendMessageTool : IMinionTool
         try
         {
             var response = await _pool.SendAsync(id, message, ct);
-            var truncated = response.Length > 1000 ? response[..1000] + "..." : response;
+
+            // Strip any <tool_call> blocks from child response — the summoner should not
+            // try to execute the child's tool calls. They were already handled by SendAsync.
+            var cleanResponse = QwenToolCallParser.GetTextBeforeToolCalls(response);
+            if (string.IsNullOrWhiteSpace(cleanResponse))
+                cleanResponse = response.Contains("TASK_COMPLETE") ? "TASK_COMPLETE" : "(minion produced tool calls only, no text response)";
+
+            var truncated = cleanResponse.Length > 2000 ? cleanResponse[..2000] + "..." : cleanResponse;
             return ToolResult.Success($"[{id}] {truncated}");
         }
         catch (Exception ex)
