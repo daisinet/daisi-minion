@@ -303,10 +303,21 @@ public abstract class MinionBase : IDisposable
             Conversation!.SendAsync(userMessage, parameters, ct), ct);
 
         var toolFmt = MinionToolFormatter.Instance;
+        int parseFailures = 0;
         while (toolFmt.ContainsToolCalls(fullResponse))
         {
             var toolCalls = toolFmt.ParseToolCalls(fullResponse);
-            if (toolCalls.Count == 0) break;
+            if (toolCalls.Count == 0)
+            {
+                // Tool call detected but JSON failed to parse — tell the model
+                if (++parseFailures > 3) break; // give up after 3 retries
+                ReportInfo("Tool call malformed — retrying");
+                Conversation!.AddToolResult("system",
+                    "Your tool call had invalid JSON. Use this exact format: {\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}. acceptance_criteria must be a single string, not an array.");
+                fullResponse = await StreamTokensAsync(
+                    Conversation.ResumeAsync(parameters, ct), ct);
+                continue;
+            }
 
             // Check for "complete" signal tool
             var completeTool = toolCalls.FirstOrDefault(c => c.Name == "complete");
