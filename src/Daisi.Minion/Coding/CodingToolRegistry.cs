@@ -48,8 +48,28 @@ public sealed class CodingToolRegistry
     /// </summary>
     public async Task<ToolResult> ExecuteAsync(ToolCall call, CancellationToken ct)
     {
-        if (!_tools.TryGetValue(call.Name, out var tool))
-            return ToolResult.Error($"Unknown tool: {call.Name}");
+        // Validate tool exists and arguments match schema
+        var (tool, validationError) = ToolCallValidator.ValidateCall(call.Name, call.Arguments, _tools);
+        if (validationError != null)
+        {
+            // Try type coercion before rejecting
+            if (tool != null)
+            {
+                var coercions = ToolCallValidator.CoerceTypes(call.Arguments, tool.ParametersSchema);
+                if (coercions.Count > 0)
+                {
+                    // Re-validate after coercion
+                    var recheck = ToolCallValidator.Validate(call.Arguments, tool.ParametersSchema);
+                    if (recheck == null)
+                    {
+                        // Coercion fixed it — proceed with execution
+                        try { return await tool.ExecuteAsync(call.Arguments, ct); }
+                        catch (Exception ex) { return ToolResult.Error($"Tool error: {ex.Message}"); }
+                    }
+                }
+            }
+            return ToolResult.Error(validationError);
+        }
 
         try
         {

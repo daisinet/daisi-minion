@@ -301,6 +301,7 @@ public abstract class MinionBase : IDisposable
 
         var fullResponse = await StreamTokensAsync(
             Conversation!.SendAsync(userMessage, parameters, ct), ct);
+        ReportModelOutput(fullResponse);
 
         var toolFmt = MinionToolFormatter.Instance;
         int parseFailures = 0;
@@ -342,6 +343,7 @@ public abstract class MinionBase : IDisposable
 
             fullResponse = await StreamTokensAsync(
                 Conversation.ResumeAsync(parameters, ct), ct);
+            ReportModelOutput(fullResponse);
         }
 
         // Module post-processing
@@ -461,6 +463,9 @@ public abstract class MinionBase : IDisposable
 
     /// <summary>Report an error message.</summary>
     protected abstract void ReportError(string message);
+
+    /// <summary>Report the model's raw output (thinking + tool calls) for logging.</summary>
+    protected virtual void ReportModelOutput(string output) { }
 
     public virtual void Dispose()
     {

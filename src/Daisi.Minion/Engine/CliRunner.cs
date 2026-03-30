@@ -148,6 +148,24 @@ public sealed class CliRunner : MinionBase
     protected override void ReportInfo(string message) => Console.Error.WriteLine(message);
     protected override void ReportError(string message) => Console.Error.WriteLine($"Error: {message}");
 
+    protected override void ReportModelOutput(string output)
+    {
+        if (!_jsonOutput) return;
+
+        // Extract thinking block if present
+        var thinkStart = output.IndexOf("<think>", StringComparison.Ordinal);
+        var thinkEnd = output.IndexOf("</think>", StringComparison.Ordinal);
+        if (thinkStart >= 0 && thinkEnd > thinkStart)
+        {
+            var thinking = output[(thinkStart + 7)..thinkEnd].Trim();
+            if (thinking.Length > 0)
+                Console.Error.WriteLine($"{{\"event\":\"thinking\",\"content\":\"{Escape(Truncate(thinking, 500))}\"}}");
+        }
+
+        // Log the raw output (truncated)
+        Console.Error.WriteLine($"{{\"event\":\"model_output\",\"length\":{output.Length},\"preview\":\"{Escape(Truncate(output, 300))}\"}}");
+    }
+
     // --- CLI-specific methods ---
 
     private async Task<int> RunInteractiveAsync()
