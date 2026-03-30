@@ -82,14 +82,12 @@ public sealed class EvaluateMinionTool : IMinionTool
 
         var notes = ToolArgs.GetString(arguments, "notes");
 
-        // Content quality check: verify files actually contain what acceptance criteria require
-        var qualityWarnings = CheckContentQuality(child);
-        if (qualityWarnings.Count > 0 && score > 0.7)
+        // Gate: summoner must have checked the minion (seen file content) before evaluating
+        if (!child.WasCheckedSinceComplete)
         {
             return Task.FromResult(ToolResult.Error(
-                $"Score {score:F1} rejected — content quality check found issues:\n"
-                + string.Join("\n", qualityWarnings.Select(w => $"  - {w}"))
-                + $"\n\nReview the files with check_minion, have the minion fix the issues, then re-evaluate."));
+                $"Cannot evaluate {minionId} — you haven't reviewed its work yet. "
+                + "Call check_minion first to see the file content, then evaluate."));
         }
 
         // Store evaluation on the child
@@ -136,93 +134,4 @@ public sealed class EvaluateMinionTool : IMinionTool
         return Task.FromResult(ToolResult.Success(result.ToString()));
     }
 
-    /// <summary>
-    /// Check file content against acceptance criteria. Returns warnings for unmet criteria.
-    /// Scans files for keywords extracted from the criteria text.
-    /// </summary>
-    private static List<string> CheckContentQuality(ChildMinion child)
-    {
-        var warnings = new List<string>();
-        if (string.IsNullOrEmpty(child.AcceptanceCriteria)) return warnings;
-        if (child.FilesModified.Count == 0)
-        {
-            warnings.Add("No files were created");
-            return warnings;
-        }
-
-        // Load all file contents
-        var allContent = new StringBuilder();
-        foreach (var path in child.FilesModified.Distinct())
-        {
-            if (File.Exists(path))
-                allContent.AppendLine(File.ReadAllText(path));
-        }
-        var content = allContent.ToString().ToLowerInvariant();
-
-        // Parse criteria into individual checks
-        var criteria = child.AcceptanceCriteria.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        foreach (var criterion in criteria)
-        {
-            var clean = criterion.TrimStart('-', '*', ' ', '\t').ToLowerInvariant();
-            if (clean.Length < 5) continue; // skip empty/short lines
-
-            // Extract keywords from the criterion to check for in content
-            var keywords = ExtractCheckKeywords(clean);
-            if (keywords.Count == 0) continue;
-
-            // Check if any keyword is missing from all files
-            var missing = keywords.Where(kw => !content.Contains(kw)).ToList();
-            if (missing.Count > 0 && missing.Count == keywords.Count)
-                warnings.Add($"Criterion may not be met: \"{criterion.TrimStart('-', '*', ' ')}\" — none of [{string.Join(", ", keywords)}] found in output files");
-        }
-
-        return warnings;
-    }
-
-    /// <summary>
-    /// Extract meaningful keywords from a criterion for content checking.
-    /// E.g., "index.html has hero section and 3 feature cards" → ["hero", "card"]
-    /// </summary>
-    private static List<string> ExtractCheckKeywords(string criterion)
-    {
-        var keywords = new List<string>();
-
-        // Look for specific patterns that indicate content requirements
-        var contentIndicators = new Dictionary<string, string[]>
-        {
-            ["hero"] = ["hero"],
-            ["card"] = ["card"],
-            ["navbar"] = ["nav"],
-            ["form"] = ["form"],
-            ["table"] = ["table"],
-            ["footer"] = ["footer"],
-            ["header"] = ["header"],
-            ["button"] = ["btn", "button"],
-            ["modal"] = ["modal"],
-            ["carousel"] = ["carousel"],
-            ["accordion"] = ["accordion"],
-            ["dropdown"] = ["dropdown"],
-            ["sidebar"] = ["sidebar"],
-            ["team"] = ["team"],
-            ["contact"] = ["contact"],
-            ["bootstrap"] = ["bootstrap"],
-        };
-
-        foreach (var (indicator, checks) in contentIndicators)
-        {
-            if (criterion.Contains(indicator))
-                keywords.AddRange(checks);
-        }
-
-        // Check for specific file requirements
-        if (criterion.Contains("index.html") && !keywords.Contains("index"))
-            keywords.Add("index");
-        if (criterion.Contains("about.html") && !keywords.Contains("about"))
-            keywords.Add("about");
-        if (criterion.Contains("style.css") && !keywords.Contains("style"))
-            keywords.Add("style");
-
-        return keywords;
-    }
 }

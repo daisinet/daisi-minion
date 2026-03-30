@@ -117,6 +117,10 @@ public sealed class CheckMinionTool : IMinionTool
             sb.AppendLine($"\nLast response: {response}");
         }
 
+        // Mark as checked — gate for evaluate_minion
+        if (child.Status == ChildMinionStatus.Complete)
+            child.WasCheckedSinceComplete = true;
+
         return Task.FromResult(ToolResult.Success(sb.ToString()));
     }
 }

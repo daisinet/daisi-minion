@@ -313,6 +313,9 @@ public sealed class ChildMinion
     /// <summary>Files this minion modified (for verification).</summary>
     public List<string> FilesModified { get; } = [];
 
+    /// <summary>Whether check_minion was called since the minion completed. Gate for evaluate_minion.</summary>
+    public bool WasCheckedSinceComplete { get; set; }
+
     /// <summary>Summoner's evaluation score (set by evaluate_minion tool).</summary>
     public double? EvaluationScore { get; set; }
 
