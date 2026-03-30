@@ -78,6 +78,11 @@ public sealed class MinionPool : IAsyncDisposable
         // Create conversation with shared model
         var toolDefs = toolRegistry.GetToolDefinitions();
         var conversation = new ConversationManager(systemPrompt, toolDefs);
+
+        // Child minions get grammar-constrained tool calling (fewer tools = fast grammar)
+        if (_configManager.Config.UseGrammarToolCalls)
+            conversation.EnableGrammarMode();
+
         conversation.Initialize(_modelHandle);
 
         var child = new ChildMinion

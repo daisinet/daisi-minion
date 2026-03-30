@@ -260,8 +260,10 @@ public abstract class MinionBase : IDisposable
         var toolDefs = ToolRegistry.GetToolDefinitions();
         Conversation = new ConversationManager(systemPrompt, toolDefs);
 
-        // Enable grammar-constrained tool calling if configured
-        if (ConfigManager.Config.UseGrammarToolCalls)
+        // Enable grammar-constrained tool calling if configured.
+        // Skip for summoner type — too many tools makes grammar constraint too slow.
+        // Child minions spawned by the summoner get grammar via MinionPool.
+        if (ConfigManager.Config.UseGrammarToolCalls && TypeConfig?.Name != "summoner")
             Conversation.EnableGrammarMode();
 
         Conversation.Initialize(ModelHandle);

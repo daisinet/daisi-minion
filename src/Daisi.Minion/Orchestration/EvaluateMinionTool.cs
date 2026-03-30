@@ -55,6 +55,14 @@ public sealed class EvaluateMinionTool : IMinionTool
         if (!_pool.Children.TryGetValue(minionId, out var child))
             return Task.FromResult(ToolResult.Error($"Unknown minion: {minionId}"));
 
+        // Hard gate: reject evaluation if the minion never did any work
+        if (child.IterationCount == 0)
+            return Task.FromResult(ToolResult.Error(
+                $"Cannot evaluate {minionId}: 0 iterations completed. Send it a message first."));
+        if (child.Status == ChildMinionStatus.Idle && child.ToolCallCount == 0)
+            return Task.FromResult(ToolResult.Error(
+                $"Cannot evaluate {minionId}: still idle with 0 tool calls. The minion hasn't done any work yet."));
+
         // Parse score — handle both number and string values from model output
         var scoreNode = arguments["score"];
         if (scoreNode == null)
