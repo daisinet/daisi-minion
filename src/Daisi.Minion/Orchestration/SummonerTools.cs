@@ -22,7 +22,8 @@ public sealed class SpawnMinionTool : IMinionTool
         {
             ["minion_type"] = new JsonObject { ["type"] = "string", ["description"] = "Type of minion: code, test, research" },
             ["task"] = new JsonObject { ["type"] = "string", ["description"] = "Clear, specific task description for the minion" },
-            ["acceptance_criteria"] = new JsonObject { ["type"] = "string", ["description"] = "Checklist of criteria the minion must meet. One per line. e.g.:\n- Code compiles without errors\n- Unit test exists and passes\n- No hardcoded paths" },
+            ["acceptance_criteria"] = new JsonObject { ["type"] = "string", ["description"] = "Checklist of criteria the minion must meet. One per line." },
+            ["working_directory"] = new JsonObject { ["type"] = "string", ["description"] = "Directory where the minion should create files. Must exist. The minion cannot write outside this directory." },
         },
         ["required"] = new JsonArray("minion_type", "task"),
     };
@@ -32,15 +33,24 @@ public sealed class SpawnMinionTool : IMinionTool
         var typeName = ToolArgs.GetString(arguments, "minion_type");
         var task = ToolArgs.GetString(arguments, "task");
         var criteria = ToolArgs.GetString(arguments, "acceptance_criteria");
+        var workDir = ToolArgs.GetString(arguments, "working_directory");
 
         if (string.IsNullOrEmpty(typeName))
             return ToolResult.Error("Missing required parameter: minion_type");
         if (string.IsNullOrEmpty(task))
             return ToolResult.Error("Missing required parameter: task");
 
+        // Ensure working directory exists
+        if (!string.IsNullOrEmpty(workDir))
+        {
+            workDir = Path.GetFullPath(workDir);
+            if (!Directory.Exists(workDir))
+                Directory.CreateDirectory(workDir);
+        }
+
         try
         {
-            var id = _pool.Spawn(typeName, task, criteria);
+            var id = _pool.Spawn(typeName, task, criteria, workDir);
 
             // Auto-start: immediately send the task so the minion begins working.
             // No need for the summoner to follow up with send_message.

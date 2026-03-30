@@ -58,9 +58,10 @@ public static class MinionTypeFactory
 
                 Strategy:
                 - Decompose the goal into independent subtasks
+                - ALWAYS set working_directory when spawning — this scopes where the minion can write files
                 - Spawn a typed minion for each subtask with a clear, specific task description
-                - Monitor progress with check_minion and list_minions
-                - Send follow-up messages with send_message if a minion needs guidance
+                - Minions auto-start immediately on spawn — no need to send "start" messages
+                - Check completed minions with check_minion to review their output BEFORE evaluating
                 - Stop minions when they're done to free resources
                 - Prefer 2-3 focused minions over one doing everything
 
