@@ -55,12 +55,22 @@ public sealed class EvaluateMinionTool : IMinionTool
         if (!_pool.Children.TryGetValue(minionId, out var child))
             return Task.FromResult(ToolResult.Error($"Unknown minion: {minionId}"));
 
-        // Parse score
-        double score;
+        // Parse score — handle both number and string values from model output
         var scoreNode = arguments["score"];
         if (scoreNode == null)
             return Task.FromResult(ToolResult.Error("Missing: score"));
-        score = Math.Clamp(scoreNode.GetValue<double>(), 0, 1);
+        double score;
+        try
+        {
+            score = scoreNode.GetValueKind() == System.Text.Json.JsonValueKind.Number
+                ? scoreNode.GetValue<double>()
+                : double.Parse(scoreNode.GetValue<string>());
+        }
+        catch
+        {
+            return Task.FromResult(ToolResult.Error($"Invalid score: {scoreNode}"));
+        }
+        score = Math.Clamp(score, 0, 1);
 
         var notes = ToolArgs.GetString(arguments, "notes");
 
