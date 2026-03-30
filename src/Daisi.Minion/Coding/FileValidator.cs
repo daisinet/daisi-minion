@@ -27,12 +27,20 @@ public static class FileValidator
         return errors is { Count: 0 } ? null : errors;
     }
 
+    private static int LineAt(string content, int charPos)
+    {
+        int line = 1;
+        for (int j = 0; j < charPos && j < content.Length; j++)
+            if (content[j] == '\n') line++;
+        return line;
+    }
+
     private static List<string> ValidateHtml(string content)
     {
         var errors = new List<string>();
 
-        // Check tag balance
-        var tagStack = new Stack<string>();
+        // Check tag balance — track (tagName, line) so errors report where the tag opened
+        var tagStack = new Stack<(string Name, int Line)>();
         var selfClosing = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "br", "hr", "img", "input", "meta", "link", "area", "base",
@@ -46,9 +54,14 @@ public static class FileValidator
             if (tagStart < 0) break;
 
             var tagEnd = content.IndexOf('>', tagStart);
-            if (tagEnd < 0) { errors.Add("Unclosed < bracket"); break; }
+            if (tagEnd < 0)
+            {
+                errors.Add($"Line {LineAt(content, tagStart)}: Unclosed < bracket");
+                break;
+            }
 
             var tag = content[(tagStart + 1)..tagEnd].Trim();
+            var line = LineAt(content, tagStart);
             i = tagEnd + 1;
 
             // Skip comments, doctype, processing instructions
@@ -63,9 +76,9 @@ public static class FileValidator
             {
                 var closeName = tag[1..].Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
                 if (tagStack.Count == 0)
-                    errors.Add($"Unexpected closing tag </{closeName}> with no matching open tag");
-                else if (!tagStack.Peek().Equals(closeName, StringComparison.OrdinalIgnoreCase))
-                    errors.Add($"Mismatched tags: expected </{tagStack.Peek()}>, found </{closeName}>");
+                    errors.Add($"Line {line}: Unexpected closing tag </{closeName}> with no matching open tag");
+                else if (!tagStack.Peek().Name.Equals(closeName, StringComparison.OrdinalIgnoreCase))
+                    errors.Add($"Line {line}: Mismatched tags: expected </{tagStack.Peek().Name}> (opened line {tagStack.Peek().Line}), found </{closeName}>");
                 else
                     tagStack.Pop();
                 continue;
@@ -75,12 +88,11 @@ public static class FileValidator
             var tagName = tag.Split([' ', '\n', '\r', '\t'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
             if (selfClosing.Contains(tagName)) continue;
 
-            // Skip script/style content (don't parse < inside them)
-            tagStack.Push(tagName);
+            tagStack.Push((tagName, line));
         }
 
-        foreach (var unclosed in tagStack)
-            errors.Add($"Unclosed tag: <{unclosed}>");
+        foreach (var (name, line) in tagStack)
+            errors.Add($"Line {line}: Unclosed tag: <{name}>");
 
         // Basic structure checks
         if (!content.Contains("<!DOCTYPE", StringComparison.OrdinalIgnoreCase) &&
@@ -95,14 +107,15 @@ public static class FileValidator
         var errors = new List<string>();
 
         // Brace balance
-        int braces = 0;
+        int braces = 0, line = 1;
         for (int i = 0; i < content.Length; i++)
         {
+            if (content[i] == '\n') line++;
             if (content[i] == '{') braces++;
             else if (content[i] == '}') braces--;
-            if (braces < 0) { errors.Add($"Extra closing brace at position {i}"); break; }
+            if (braces < 0) { errors.Add($"Line {line}: Extra closing brace"); break; }
         }
-        if (braces > 0) errors.Add($"{braces} unclosed brace(s)");
+        if (braces > 0) errors.Add($"{braces} unclosed brace(s) — check that every {{ has a matching }}");
 
         // Unclosed comments
         var commentStart = 0;

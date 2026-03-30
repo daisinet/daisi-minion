@@ -40,24 +40,23 @@ public sealed class FileWriteTool : IMinionTool
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
-        bool existed = File.Exists(path);
-        await File.WriteAllTextAsync(path, content, ct);
-
-        var lineCount = content.Split('\n').Length;
-        var msg = existed
-            ? $"Overwrote {path} ({lineCount} lines)"
-            : $"Created {path} ({lineCount} lines)";
-
-        // Auto-validate file structure
+        // Validate structure before writing
         var validationErrors = FileValidator.Validate(path, content);
         if (validationErrors != null)
         {
-            msg += $"\n\nSTRUCTURE ERRORS ({validationErrors.Count}):\n"
+            var lineCount = content.Split('\n').Length;
+            return ToolResult.Error(
+                $"NOT WRITTEN — {path} ({lineCount} lines) has structural errors:\n"
                 + string.Join("\n", validationErrors.Select(e => $"  - {e}"))
-                + "\n\nFix these errors before considering this file complete.";
-            return ToolResult.Error(msg);
+                + "\n\nFix these errors and call file_write again.");
         }
 
-        return ToolResult.Success(msg);
+        bool existed = File.Exists(path);
+        await File.WriteAllTextAsync(path, content, ct);
+
+        var lines = content.Split('\n').Length;
+        return ToolResult.Success(existed
+            ? $"Overwrote {path} ({lines} lines)"
+            : $"Created {path} ({lines} lines)");
     }
 }
