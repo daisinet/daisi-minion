@@ -66,6 +66,16 @@ public sealed class FileEditTool : IMinionTool
             ? content.Replace(oldStr, newStr)
             : ReplaceFirst(content, oldStr, newStr);
 
+        // Validate structure before writing
+        var validationErrors = FileValidator.Validate(path, newContent);
+        if (validationErrors != null)
+        {
+            return ToolResult.Error(
+                $"NOT WRITTEN — edit to {path} would create structural errors:\n"
+                + string.Join("\n", validationErrors.Select(e => $"  - {e}"))
+                + "\n\nFix your edit and try again.");
+        }
+
         await File.WriteAllTextAsync(path, newContent, ct);
 
         int count = replaceAll ? CountOccurrences(content, oldStr) : 1;

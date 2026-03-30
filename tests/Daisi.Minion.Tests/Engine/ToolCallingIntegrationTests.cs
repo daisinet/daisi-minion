@@ -17,7 +17,7 @@ namespace Daisi.Minion.Tests.Engine;
 /// </summary>
 public class ToolCallingIntegrationTests : IAsyncLifetime
 {
-    private static readonly string TestModelPath = @"C:\GGUFS\Qwen3.5-9B-Q8_0.gguf";
+    private static readonly string TestModelPath = @"C:\GGUFS\custom\Qwen3.5-9B-Q8_0.gguf";
     private static readonly string TestDir = Path.Combine(Path.GetTempPath(), $"minion-tool-test-{Guid.NewGuid():N}");
 
     private DaisiLlogosModelHandle? _modelHandle;

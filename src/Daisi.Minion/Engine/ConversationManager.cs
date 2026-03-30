@@ -19,6 +19,8 @@ public sealed class ConversationManager : IDisposable
     private readonly List<ToolDefinition> _toolDefinitions;
     private readonly MinionToolFormatter _toolFormatter = MinionToolFormatter.Instance;
     private int[]? _stopTokenIds;
+    private bool _grammarMode;
+    private string? _toolCallGrammar;
 
     // Track files that have been read and/or modified during this conversation
     private readonly HashSet<string> _filesRead = new(StringComparer.OrdinalIgnoreCase);
@@ -26,6 +28,9 @@ public sealed class ConversationManager : IDisposable
 
     public bool HasSession => _session != null;
     public IReadOnlyList<ChatMessage>? History => _session?.History;
+
+    /// <summary>Whether grammar-constrained tool calling is active.</summary>
+    public bool GrammarMode => _grammarMode;
 
     /// <summary>Number of tokens currently in the KV cache.</summary>
     public int ContextUsed => _session?.CachedTokenCount ?? 0;
@@ -47,6 +52,17 @@ public sealed class ConversationManager : IDisposable
         _toolDefinitions = toolDefinitions;
     }
 
+    /// <summary>
+    /// Enable grammar-constrained tool calling. Must be called before Initialize.
+    /// When enabled, the model output is constrained to valid JSON tool calls
+    /// via GBNF grammar, eliminating malformed output.
+    /// </summary>
+    public void EnableGrammarMode()
+    {
+        _grammarMode = true;
+        _toolCallGrammar = ToolCallGrammarBuilder.BuildStrict(_toolDefinitions);
+    }
+
     public void Initialize(DaisiLlogosModelHandle modelHandle)
     {
         _modelHandle = modelHandle;
@@ -60,20 +76,26 @@ public sealed class ConversationManager : IDisposable
         _filesModified.Clear();
         if (_modelHandle == null) return;
 
-        var renderer = new MinionChatRenderer(_toolDefinitions);
+        var renderer = new MinionChatRenderer(_toolDefinitions, grammarMode: _grammarMode);
         _session = _modelHandle.CreateChatSession(_systemPrompt, renderer);
 
-        // Resolve </tool_call> token ID for stop token
-        var toolCallEndId = _modelHandle.Tokenizer.Vocabulary.TokenToId("</tool_call>");
-        _stopTokenIds = toolCallEndId >= 0
-            ? [_modelHandle.Tokenizer.Vocabulary.EosTokenId, toolCallEndId]
-            : null;
+        if (!_grammarMode)
+        {
+            // Resolve </tool_call> token ID for stop token (not needed in grammar mode)
+            var toolCallEndId = _modelHandle.Tokenizer.Vocabulary.TokenToId("</tool_call>");
+            _stopTokenIds = toolCallEndId >= 0
+                ? [_modelHandle.Tokenizer.Vocabulary.EosTokenId, toolCallEndId]
+                : null;
+        }
     }
 
     public IAsyncEnumerable<string> SendAsync(string userMessage, GenerationParams parameters, CancellationToken ct)
     {
         if (_session == null)
             throw new InvalidOperationException("No model loaded. Use /model to load a model.");
+
+        if (_grammarMode && _toolCallGrammar != null)
+            parameters = parameters with { GrammarText = _toolCallGrammar };
 
         return TokenStreamFixer.Fix(_session.ChatAsync(new ChatMessage("user", userMessage), parameters, ct), ct);
     }
@@ -94,6 +116,9 @@ public sealed class ConversationManager : IDisposable
     {
         if (_session == null)
             throw new InvalidOperationException("No model loaded.");
+
+        if (_grammarMode && _toolCallGrammar != null)
+            parameters = parameters with { GrammarText = _toolCallGrammar };
 
         return TokenStreamFixer.Fix(_session.ChatAsync(new ChatMessage("user", ""), parameters, ct), ct);
     }

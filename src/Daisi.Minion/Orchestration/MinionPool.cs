@@ -1,10 +1,13 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using System.Threading.Channels;
+using Daisi.Minion.Benchmarks;
 using Daisi.Minion.Coding;
 using Daisi.Minion.Coding.Tools;
 using Daisi.Minion.Config;
 using Daisi.Minion.Engine;
+using Daisi.Minion.Modules;
 using Daisi.Minion.Types;
 using Daisi.Llogos.Chat;
 using Daisi.Llogos.Inference;
@@ -25,6 +28,9 @@ public sealed class MinionPool : IAsyncDisposable
     private readonly SemaphoreSlim _inferenceLock = new(1, 1);
     private int _nextId;
 
+    /// <summary>Optional callback for logging child minion events.</summary>
+    public Action<string, string>? OnChildEvent { get; set; } // (childId, message)
+
     public MinionPool(DaisiLlogosModelHandle? modelHandle, ConfigManager configManager, ToolSandbox sandbox)
     {
         _modelHandle = modelHandle;
@@ -37,7 +43,7 @@ public sealed class MinionPool : IAsyncDisposable
     /// <summary>
     /// Spawn a new child minion with a specific type and task.
     /// </summary>
-    public string Spawn(string typeName, string task, string? workingDirectory = null)
+    public string Spawn(string typeName, string task, string? acceptanceCriteria = null, string? workingDirectory = null)
     {
         // Validate type first so callers get a clear error for bad type names
         var typeConfig = MinionTypeFactory.Get(typeName);
@@ -70,11 +76,16 @@ public sealed class MinionPool : IAsyncDisposable
         }
 
         // Build system prompt
-        var systemPrompt = BuildChildSystemPrompt(id, typeConfig, task, childWorkDir);
+        var systemPrompt = BuildChildSystemPrompt(id, typeConfig, task, childWorkDir, acceptanceCriteria);
 
         // Create conversation with shared model
         var toolDefs = toolRegistry.GetToolDefinitions();
         var conversation = new ConversationManager(systemPrompt, toolDefs);
+
+        // Child minions get grammar-constrained tool calling (fewer tools = fast grammar)
+        if (_configManager.Config.UseGrammarToolCalls)
+            conversation.EnableGrammarMode();
+
         conversation.Initialize(_modelHandle);
 
         var child = new ChildMinion
@@ -82,6 +93,7 @@ public sealed class MinionPool : IAsyncDisposable
             Id = id,
             TypeName = typeName,
             Task = task,
+            AcceptanceCriteria = acceptanceCriteria,
             Status = ChildMinionStatus.Idle,
             ToolRegistry = toolRegistry,
             Conversation = conversation,
@@ -103,6 +115,7 @@ public sealed class MinionPool : IAsyncDisposable
 
         child.Status = ChildMinionStatus.Working;
         child.LastActivity = DateTime.UtcNow;
+        child.Stopwatch.Start();
 
         var profile = GetGenerationParams();
         var toolFmt = MinionToolFormatter.Instance;
@@ -114,17 +127,40 @@ public sealed class MinionPool : IAsyncDisposable
             var response = await StreamToString(
                 child.Conversation.SendAsync(message, profile, ct), ct);
 
-            // Agentic tool loop
-            while (toolFmt.ContainsToolCalls(response))
+            // Agentic tool loop — keep going until no more tool calls or max rounds
+            const int maxToolRounds = 20;
+            for (int round = 0; round < maxToolRounds; round++)
             {
+                if (!toolFmt.ContainsToolCalls(response)) break;
+
                 var toolCalls = toolFmt.ParseToolCalls(response);
-                if (toolCalls.Count == 0) break;
+                if (toolCalls.Count == 0)
+                {
+                    // Tool call detected but failed to parse (likely truncated JSON).
+                    // Tell the child to retry with a shorter response.
+                    child.Conversation.AddToolResult("system",
+                        "Your tool call was truncated. Write a shorter file or split into smaller parts. Try again.");
+                    response = await StreamToString(
+                        child.Conversation.ResumeAsync(profile, ct), ct);
+                    continue;
+                }
 
                 foreach (var call in toolCalls)
                 {
+                    OnChildEvent?.Invoke(child.Id, $"tool_call: {call.Name}({call.Arguments.ToJsonString()[..Math.Min(call.Arguments.ToJsonString().Length, 200)]})");
+
                     var result = await child.ToolRegistry.ExecuteAsync(call, ct);
                     child.Conversation.AddToolResult(call.Name, result.Output);
                     child.ToolCallCount++;
+
+                    var status = result.IsError ? "ERROR" : "ok";
+                    OnChildEvent?.Invoke(child.Id, $"tool_result: {call.Name} [{status}] {result.Output[..Math.Min(result.Output.Length, 200)]}");
+
+                    if (call.Name is "file_write" or "file_edit")
+                    {
+                        var path = call.Arguments["path"]?.ToString();
+                        if (path != null) child.FilesModified.Add(path);
+                    }
                 }
 
                 response = await StreamToString(
@@ -150,6 +186,7 @@ public sealed class MinionPool : IAsyncDisposable
         }
         finally
         {
+            child.Stopwatch.Stop();
             _inferenceLock.Release();
         }
     }
@@ -192,7 +229,7 @@ public sealed class MinionPool : IAsyncDisposable
         return sb.ToString();
     }
 
-    private static string BuildChildSystemPrompt(string id, MinionTypeConfig typeConfig, string task, string workDir)
+    private static string BuildChildSystemPrompt(string id, MinionTypeConfig typeConfig, string task, string workDir, string? acceptanceCriteria = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"You are {id}, a {typeConfig.Name} minion worker.");
@@ -203,8 +240,19 @@ public sealed class MinionPool : IAsyncDisposable
             sb.AppendLine(typeConfig.SystemPromptExtension);
             sb.AppendLine();
         }
-        sb.AppendLine("When your task is complete, include TASK_COMPLETE in your response.");
-        sb.AppendLine("If you're stuck, clearly explain what's blocking you.");
+        if (!string.IsNullOrEmpty(acceptanceCriteria))
+        {
+            sb.AppendLine("# Acceptance Criteria");
+            sb.AppendLine("Your work will be evaluated against these criteria. Meet ALL of them before declaring complete:");
+            sb.AppendLine(acceptanceCriteria);
+            sb.AppendLine();
+        }
+        sb.AppendLine("IMPORTANT:");
+        sb.AppendLine("- You MUST respond with tool calls. Do not describe what you plan to do — call the tool.");
+        sb.AppendLine("- Write ONE file per tool call. Do not try to write multiple files in a single response.");
+        sb.AppendLine("- Never say you created a file without actually calling file_write.");
+        sb.AppendLine("- When ALL acceptance criteria are met, include TASK_COMPLETE in your response.");
+        sb.AppendLine("- If you're stuck, clearly explain what's blocking you.");
         return sb.ToString();
     }
 
@@ -212,9 +260,11 @@ public sealed class MinionPool : IAsyncDisposable
     {
         var modelPath = _configManager.Config.ActiveModel;
         var profile = !string.IsNullOrEmpty(modelPath) ? ModelProfile.Load(modelPath) : null;
+        // Child minions get 2x token budget — they write full file content in tool calls
+        var baseTokens = profile?.MaxTokens ?? _configManager.Config.MaxTokens;
         return new GenerationParams
         {
-            MaxTokens = profile?.MaxTokens ?? _configManager.Config.MaxTokens,
+            MaxTokens = Math.Max(baseTokens, 8192),
             Temperature = profile?.Temperature ?? _configManager.Config.Temperature,
             TopK = profile?.TopK ?? 40,
             TopP = profile?.TopP ?? 0.9f,
@@ -247,6 +297,7 @@ public sealed class ChildMinion
     public required string Id { get; init; }
     public required string TypeName { get; init; }
     public required string Task { get; init; }
+    public string? AcceptanceCriteria { get; init; }
     public ChildMinionStatus Status { get; set; }
     public required CodingToolRegistry ToolRegistry { get; init; }
     public required ConversationManager Conversation { get; init; }
@@ -255,6 +306,46 @@ public sealed class ChildMinion
     public string? LastResponse { get; set; }
     public int IterationCount { get; set; }
     public int ToolCallCount { get; set; }
+
+    // ── Evaluation metrics ──
+
+    /// <summary>Names of modules that were active when this minion was spawned.</summary>
+    public List<string> ActiveModules { get; init; } = [];
+
+    /// <summary>Total tokens generated across all iterations.</summary>
+    public int TotalTokens { get; set; }
+
+    /// <summary>Stopwatch tracking total working time.</summary>
+    public Stopwatch Stopwatch { get; } = new();
+
+    /// <summary>Files this minion modified (for verification).</summary>
+    public List<string> FilesModified { get; } = [];
+
+    /// <summary>Whether check_minion was called since the minion completed. Gate for evaluate_minion.</summary>
+    public bool WasCheckedSinceComplete { get; set; }
+
+    /// <summary>Summoner's evaluation score (set by evaluate_minion tool).</summary>
+    public double? EvaluationScore { get; set; }
+
+    /// <summary>Summoner's evaluation notes.</summary>
+    public string? EvaluationNotes { get; set; }
+
+    /// <summary>Build a TaskOutcome from this minion's metrics.</summary>
+    public TaskOutcome BuildOutcome() => new()
+    {
+        Succeeded = Status == ChildMinionStatus.Complete,
+        IterationsUsed = IterationCount,
+        IterationBudget = 20,
+        ToolCalls = ToolCallCount,
+        TotalTokens = TotalTokens,
+        Duration = Stopwatch.Elapsed,
+        FilesModified = this.FilesModified.Count,
+        WasStopped = Status == ChildMinionStatus.Stopped,
+        TaskDescription = Task,
+        MinionType = TypeName,
+        SelfScore = EvaluationScore ?? 0,
+        SelfNotes = EvaluationNotes,
+    };
 }
 
 public enum ChildMinionStatus

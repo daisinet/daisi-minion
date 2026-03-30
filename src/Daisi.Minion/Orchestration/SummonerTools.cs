@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Daisi.Minion.Coding;
+using Daisi.Minion.Engine;
 
 namespace Daisi.Minion.Orchestration;
 
@@ -12,7 +13,7 @@ public sealed class SpawnMinionTool : IMinionTool
     public SpawnMinionTool(MinionPool pool) => _pool = pool;
 
     public string Name => "spawn_minion";
-    public string Description => "Spawn a new worker minion. Types: code, test, research. Returns the minion's ID.";
+    public string Description => "Spawn a new worker minion. Types: code, test, research. Always include acceptance_criteria so the minion knows what 'done well' looks like.";
 
     public JsonObject ParametersSchema => new()
     {
@@ -21,28 +22,45 @@ public sealed class SpawnMinionTool : IMinionTool
         {
             ["minion_type"] = new JsonObject { ["type"] = "string", ["description"] = "Type of minion: code, test, research" },
             ["task"] = new JsonObject { ["type"] = "string", ["description"] = "Clear, specific task description for the minion" },
+            ["acceptance_criteria"] = new JsonObject { ["type"] = "string", ["description"] = "Checklist of criteria the minion must meet. One per line." },
+            ["working_directory"] = new JsonObject { ["type"] = "string", ["description"] = "Directory where the minion should create files. Must exist. The minion cannot write outside this directory." },
         },
         ["required"] = new JsonArray("minion_type", "task"),
     };
 
-    public Task<ToolResult> ExecuteAsync(JsonObject arguments, CancellationToken ct)
+    public async Task<ToolResult> ExecuteAsync(JsonObject arguments, CancellationToken ct)
     {
         var typeName = ToolArgs.GetString(arguments, "minion_type");
         var task = ToolArgs.GetString(arguments, "task");
+        var criteria = ToolArgs.GetString(arguments, "acceptance_criteria");
+        var workDir = ToolArgs.GetString(arguments, "working_directory");
 
         if (string.IsNullOrEmpty(typeName))
-            return Task.FromResult(ToolResult.Error("Missing required parameter: minion_type"));
+            return ToolResult.Error("Missing required parameter: minion_type");
         if (string.IsNullOrEmpty(task))
-            return Task.FromResult(ToolResult.Error("Missing required parameter: task"));
+            return ToolResult.Error("Missing required parameter: task");
+
+        // Ensure working directory exists
+        if (!string.IsNullOrEmpty(workDir))
+        {
+            workDir = Path.GetFullPath(workDir);
+            if (!Directory.Exists(workDir))
+                Directory.CreateDirectory(workDir);
+        }
 
         try
         {
-            var id = _pool.Spawn(typeName, task);
-            return Task.FromResult(ToolResult.Success($"Spawned {id}. Task: {task}"));
+            var id = _pool.Spawn(typeName, task, criteria, workDir);
+
+            // Auto-start: immediately send the task so the minion begins working.
+            // No need for the summoner to follow up with send_message.
+            var response = await _pool.SendAsync(id, "Begin working on your task now. Write one file at a time.", ct);
+            var truncated = response.Length > 1000 ? response[..1000] + "..." : response;
+            return ToolResult.Success($"Spawned and started {id}.\nTask: {task}\n\nMinion response: {truncated}");
         }
         catch (Exception ex)
         {
-            return Task.FromResult(ToolResult.Error($"Failed to spawn: {ex.Message}"));
+            return ToolResult.Error($"Failed to spawn: {ex.Message}");
         }
     }
 }
@@ -81,15 +99,42 @@ public sealed class CheckMinionTool : IMinionTool
         sb.AppendLine($"Type: {child.TypeName}");
         sb.AppendLine($"Status: {child.Status}");
         sb.AppendLine($"Task: {child.Task}");
+        if (child.AcceptanceCriteria != null)
+            sb.AppendLine($"Acceptance criteria:\n{child.AcceptanceCriteria}");
         sb.AppendLine($"Iterations: {child.IterationCount}");
         sb.AppendLine($"Tool calls: {child.ToolCallCount}");
+        sb.AppendLine($"Files modified: {child.FilesModified.Count}");
+        sb.AppendLine($"Duration: {child.Stopwatch.Elapsed.TotalSeconds:F1}s");
+
+        // Show file content previews for completed minions so summoner can verify quality
+        if (child.Status == ChildMinionStatus.Complete && child.FilesModified.Count > 0)
+        {
+            sb.AppendLine("\n--- Files Created ---");
+            foreach (var filePath in child.FilesModified.Distinct().Take(5))
+            {
+                if (!File.Exists(filePath)) continue;
+                try
+                {
+                    var content = File.ReadAllText(filePath);
+                    var preview = content.Length > 800 ? content[..800] + "\n... (truncated)" : content;
+                    sb.AppendLine($"\n=== {Path.GetFileName(filePath)} ({content.Length} bytes) ===");
+                    sb.AppendLine(preview);
+                }
+                catch { }
+            }
+        }
+
         if (child.LastResponse != null)
         {
             var response = child.LastResponse.Length > 500
                 ? child.LastResponse[..500] + "..."
                 : child.LastResponse;
-            sb.AppendLine($"Last response: {response}");
+            sb.AppendLine($"\nLast response: {response}");
         }
+
+        // Mark as checked — gate for evaluate_minion
+        if (child.Status == ChildMinionStatus.Complete)
+            child.WasCheckedSinceComplete = true;
 
         return Task.FromResult(ToolResult.Success(sb.ToString()));
     }
@@ -129,7 +174,14 @@ public sealed class SendMessageTool : IMinionTool
         try
         {
             var response = await _pool.SendAsync(id, message, ct);
-            var truncated = response.Length > 1000 ? response[..1000] + "..." : response;
+
+            // Strip any <tool_call> blocks from child response — the summoner should not
+            // try to execute the child's tool calls. They were already handled by SendAsync.
+            var cleanResponse = QwenToolCallParser.GetTextBeforeToolCalls(response);
+            if (string.IsNullOrWhiteSpace(cleanResponse))
+                cleanResponse = response.Contains("TASK_COMPLETE") ? "TASK_COMPLETE" : "(minion produced tool calls only, no text response)";
+
+            var truncated = cleanResponse.Length > 2000 ? cleanResponse[..2000] + "..." : cleanResponse;
             return ToolResult.Success($"[{id}] {truncated}");
         }
         catch (Exception ex)
