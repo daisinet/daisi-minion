@@ -171,6 +171,7 @@ public abstract class MinionBase : IDisposable
         if (TypeConfig?.Name != "summoner" || ModelHandle == null) return;
 
         Pool = new MinionPool(ModelHandle, ConfigManager, Sandbox);
+        Pool.OnChildEvent = (childId, msg) => ReportInfo($"[{childId}] {msg}");
         ToolRegistry.Register(new SpawnMinionTool(Pool));
         ToolRegistry.Register(new CheckMinionTool(Pool));
         ToolRegistry.Register(new SendMessageTool(Pool));

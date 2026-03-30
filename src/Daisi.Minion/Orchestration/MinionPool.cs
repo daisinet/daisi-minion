@@ -28,6 +28,9 @@ public sealed class MinionPool : IAsyncDisposable
     private readonly SemaphoreSlim _inferenceLock = new(1, 1);
     private int _nextId;
 
+    /// <summary>Optional callback for logging child minion events.</summary>
+    public Action<string, string>? OnChildEvent { get; set; } // (childId, message)
+
     public MinionPool(DaisiLlogosModelHandle? modelHandle, ConfigManager configManager, ToolSandbox sandbox)
     {
         _modelHandle = modelHandle;
@@ -144,9 +147,14 @@ public sealed class MinionPool : IAsyncDisposable
 
                 foreach (var call in toolCalls)
                 {
+                    OnChildEvent?.Invoke(child.Id, $"tool_call: {call.Name}({call.Arguments.ToJsonString()[..Math.Min(call.Arguments.ToJsonString().Length, 200)]})");
+
                     var result = await child.ToolRegistry.ExecuteAsync(call, ct);
                     child.Conversation.AddToolResult(call.Name, result.Output);
                     child.ToolCallCount++;
+
+                    var status = result.IsError ? "ERROR" : "ok";
+                    OnChildEvent?.Invoke(child.Id, $"tool_result: {call.Name} [{status}] {result.Output[..Math.Min(result.Output.Length, 200)]}");
 
                     if (call.Name is "file_write" or "file_edit")
                     {

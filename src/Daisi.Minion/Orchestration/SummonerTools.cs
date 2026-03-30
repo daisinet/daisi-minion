@@ -27,25 +27,30 @@ public sealed class SpawnMinionTool : IMinionTool
         ["required"] = new JsonArray("minion_type", "task"),
     };
 
-    public Task<ToolResult> ExecuteAsync(JsonObject arguments, CancellationToken ct)
+    public async Task<ToolResult> ExecuteAsync(JsonObject arguments, CancellationToken ct)
     {
         var typeName = ToolArgs.GetString(arguments, "minion_type");
         var task = ToolArgs.GetString(arguments, "task");
         var criteria = ToolArgs.GetString(arguments, "acceptance_criteria");
 
         if (string.IsNullOrEmpty(typeName))
-            return Task.FromResult(ToolResult.Error("Missing required parameter: minion_type"));
+            return ToolResult.Error("Missing required parameter: minion_type");
         if (string.IsNullOrEmpty(task))
-            return Task.FromResult(ToolResult.Error("Missing required parameter: task"));
+            return ToolResult.Error("Missing required parameter: task");
 
         try
         {
             var id = _pool.Spawn(typeName, task, criteria);
-            return Task.FromResult(ToolResult.Success($"Spawned {id}. Task: {task}"));
+
+            // Auto-start: immediately send the task so the minion begins working.
+            // No need for the summoner to follow up with send_message.
+            var response = await _pool.SendAsync(id, "Begin working on your task now. Write one file at a time.", ct);
+            var truncated = response.Length > 1000 ? response[..1000] + "..." : response;
+            return ToolResult.Success($"Spawned and started {id}.\nTask: {task}\n\nMinion response: {truncated}");
         }
         catch (Exception ex)
         {
-            return Task.FromResult(ToolResult.Error($"Failed to spawn: {ex.Message}"));
+            return ToolResult.Error($"Failed to spawn: {ex.Message}");
         }
     }
 }
