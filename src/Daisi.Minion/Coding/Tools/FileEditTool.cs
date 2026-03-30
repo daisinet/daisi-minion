@@ -69,7 +69,19 @@ public sealed class FileEditTool : IMinionTool
         await File.WriteAllTextAsync(path, newContent, ct);
 
         int count = replaceAll ? CountOccurrences(content, oldStr) : 1;
-        return ToolResult.Success($"Replaced {count} occurrence(s) in {path}");
+        var msg = $"Replaced {count} occurrence(s) in {path}";
+
+        // Auto-validate file structure after edit
+        var validationErrors = FileValidator.Validate(path, newContent);
+        if (validationErrors != null)
+        {
+            msg += $"\n\nSTRUCTURE ERRORS ({validationErrors.Count}):\n"
+                + string.Join("\n", validationErrors.Select(e => $"  - {e}"))
+                + "\n\nFix these errors before considering this file complete.";
+            return ToolResult.Error(msg);
+        }
+
+        return ToolResult.Success(msg);
     }
 
     private static string ReplaceFirst(string text, string oldValue, string newValue)

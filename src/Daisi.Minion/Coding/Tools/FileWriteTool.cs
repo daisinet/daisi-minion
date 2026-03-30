@@ -44,8 +44,20 @@ public sealed class FileWriteTool : IMinionTool
         await File.WriteAllTextAsync(path, content, ct);
 
         var lineCount = content.Split('\n').Length;
-        return ToolResult.Success(existed
+        var msg = existed
             ? $"Overwrote {path} ({lineCount} lines)"
-            : $"Created {path} ({lineCount} lines)");
+            : $"Created {path} ({lineCount} lines)";
+
+        // Auto-validate file structure
+        var validationErrors = FileValidator.Validate(path, content);
+        if (validationErrors != null)
+        {
+            msg += $"\n\nSTRUCTURE ERRORS ({validationErrors.Count}):\n"
+                + string.Join("\n", validationErrors.Select(e => $"  - {e}"))
+                + "\n\nFix these errors before considering this file complete.";
+            return ToolResult.Error(msg);
+        }
+
+        return ToolResult.Success(msg);
     }
 }
