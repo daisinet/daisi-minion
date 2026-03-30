@@ -366,7 +366,20 @@ public abstract class MinionBase : IDisposable
             var fullResponse = await RunAgenticStepAsync(message, ct);
 
             if (fullResponse.Contains("GOAL_COMPLETE", StringComparison.OrdinalIgnoreCase))
+            {
+                // For summoner type: verify that children actually produced output
+                if (Pool != null && Pool.Children.Count > 0)
+                {
+                    var totalFiles = Pool.Children.Values.Sum(c => c.FilesModified.Count);
+                    var totalTools = Pool.Children.Values.Sum(c => c.ToolCallCount);
+                    if (totalFiles == 0 && totalTools == 0)
+                    {
+                        ReportInfo("GOAL_COMPLETE rejected: no children produced any files or tool calls. Continuing.");
+                        continue;
+                    }
+                }
                 return (iteration, true);
+            }
         }
 
         return (maxIterations, false);

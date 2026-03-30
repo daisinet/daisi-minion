@@ -124,11 +124,23 @@ public sealed class MinionPool : IAsyncDisposable
             var response = await StreamToString(
                 child.Conversation.SendAsync(message, profile, ct), ct);
 
-            // Agentic tool loop
-            while (toolFmt.ContainsToolCalls(response))
+            // Agentic tool loop — keep going until no more tool calls or max rounds
+            const int maxToolRounds = 20;
+            for (int round = 0; round < maxToolRounds; round++)
             {
+                if (!toolFmt.ContainsToolCalls(response)) break;
+
                 var toolCalls = toolFmt.ParseToolCalls(response);
-                if (toolCalls.Count == 0) break;
+                if (toolCalls.Count == 0)
+                {
+                    // Tool call detected but failed to parse (likely truncated JSON).
+                    // Tell the child to retry with a shorter response.
+                    child.Conversation.AddToolResult("system",
+                        "Your tool call was truncated. Write a shorter file or split into smaller parts. Try again.");
+                    response = await StreamToString(
+                        child.Conversation.ResumeAsync(profile, ct), ct);
+                    continue;
+                }
 
                 foreach (var call in toolCalls)
                 {
@@ -136,7 +148,6 @@ public sealed class MinionPool : IAsyncDisposable
                     child.Conversation.AddToolResult(call.Name, result.Output);
                     child.ToolCallCount++;
 
-                    // Track file modifications for evaluation
                     if (call.Name is "file_write" or "file_edit")
                     {
                         var path = call.Arguments["path"]?.ToString();
@@ -228,9 +239,12 @@ public sealed class MinionPool : IAsyncDisposable
             sb.AppendLine(acceptanceCriteria);
             sb.AppendLine();
         }
-        sb.AppendLine("IMPORTANT: Write ONE file per tool call. Do not try to write multiple files in a single response.");
-        sb.AppendLine("When your task is complete and all acceptance criteria are met, include TASK_COMPLETE in your response.");
-        sb.AppendLine("If you're stuck, clearly explain what's blocking you.");
+        sb.AppendLine("IMPORTANT:");
+        sb.AppendLine("- You MUST respond with tool calls. Do not describe what you plan to do — call the tool.");
+        sb.AppendLine("- Write ONE file per tool call. Do not try to write multiple files in a single response.");
+        sb.AppendLine("- Never say you created a file without actually calling file_write.");
+        sb.AppendLine("- When ALL acceptance criteria are met, include TASK_COMPLETE in your response.");
+        sb.AppendLine("- If you're stuck, clearly explain what's blocking you.");
         return sb.ToString();
     }
 
