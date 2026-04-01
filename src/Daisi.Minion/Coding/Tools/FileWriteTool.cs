@@ -25,7 +25,8 @@ public sealed class FileWriteTool : IMinionTool
     public async Task<ToolResult> ExecuteAsync(JsonObject arguments, CancellationToken ct)
     {
         var path = arguments["path"]?.GetValue<string>();
-        var content = arguments["content"]?.GetValue<string>();
+        var content = arguments["content"]?.GetValue<string>()
+            ?? arguments["file_content"]?.GetValue<string>(); // alias: models sometimes use file_content
 
         if (string.IsNullOrEmpty(path))
             return ToolResult.Error("Missing required parameter: path");
@@ -39,12 +40,23 @@ public sealed class FileWriteTool : IMinionTool
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
+        // Validate structure before writing
+        var validationErrors = FileValidator.Validate(path, content);
+        if (validationErrors != null)
+        {
+            var lineCount = content.Split('\n').Length;
+            return ToolResult.Error(
+                $"NOT WRITTEN — {path} ({lineCount} lines) has structural errors:\n"
+                + string.Join("\n", validationErrors.Select(e => $"  - {e}"))
+                + "\n\nFix these errors and call file_write again.");
+        }
+
         bool existed = File.Exists(path);
         await File.WriteAllTextAsync(path, content, ct);
 
-        var lineCount = content.Split('\n').Length;
+        var lines = content.Split('\n').Length;
         return ToolResult.Success(existed
-            ? $"Overwrote {path} ({lineCount} lines)"
-            : $"Created {path} ({lineCount} lines)");
+            ? $"Overwrote {path} ({lines} lines)"
+            : $"Created {path} ({lines} lines)");
     }
 }

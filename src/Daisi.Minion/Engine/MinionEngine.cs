@@ -23,6 +23,7 @@ public sealed class MinionEngine : IDisposable
     private readonly InputHandler _input = new();
     private readonly CodingToolRegistry _toolRegistry = new();
     private readonly SlashCommandDispatcher _commands = new();
+    private CronScheduler? _cronScheduler;
     private readonly ProjectContext _projectContext;
     private readonly RoleManager _roles = new();
     private readonly PersonaManager _personas = new();
@@ -987,6 +988,9 @@ public sealed class MinionEngine : IDisposable
             InitializeConversation();
         }));
         _commands.Register("goal", new GoalCommandHandler(_renderer, RunGoalAsync));
+        _commands.Register("darwin", new DarwinCommandHandler(_renderer, _configManager, RunGoalAsync));
+        _cronScheduler = new CronScheduler(_commands, msg => InferenceLog.Log(msg));
+        _commands.Register("cron", new CronCommandHandler(_renderer, _cronScheduler));
     }
 
     private void ShowRawLastResponse()
@@ -1122,6 +1126,7 @@ public sealed class MinionEngine : IDisposable
 
     public void Dispose()
     {
+        _cronScheduler?.Dispose();
         _layout?.Dispose();
         _dualMode?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _conversation?.Dispose();

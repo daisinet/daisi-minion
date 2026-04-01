@@ -22,6 +22,12 @@ public abstract class MinionBase : IDisposable
 {
     protected readonly ConfigManager ConfigManager;
     protected readonly CodingToolRegistry ToolRegistry = new();
+
+    /// <summary>Wire up validation logging after construction.</summary>
+    protected void InitializeValidationLogging()
+    {
+        ToolRegistry.OnValidationEvent = msg => ReportInfo(msg);
+    }
     protected readonly ProjectContext ProjectContext;
     protected readonly RoleManager Roles = new();
     protected readonly PersonaManager Personas = new();
@@ -53,6 +59,7 @@ public abstract class MinionBase : IDisposable
         Sandbox = new ToolSandbox(workDir);
         ProjectContext = new ProjectContext(workDir);
         RegisterBaseTools();
+        InitializeValidationLogging();
         LoadModules();
     }
 
@@ -92,10 +99,15 @@ public abstract class MinionBase : IDisposable
 
     /// <summary>
     /// Discover, compile, and load modules from ~/.daisi-minion/modules/.
+    /// If DaisiGit is configured, pulls latest modules from the remote fork first.
     /// Module tools are registered after base tools are sealed.
     /// </summary>
     private void LoadModules()
     {
+        // Pull from DaisiGit if configured
+        if (ConfigManager.Config.PullModules && !string.IsNullOrEmpty(ConfigManager.Config.ModulesRepo))
+            PullRemoteModules();
+
         var loader = new ModuleLoader(log: msg => InferenceLog.Log($"[modules] {msg}"));
         var modules = loader.LoadAll();
 
@@ -121,6 +133,36 @@ public abstract class MinionBase : IDisposable
     }
 
     /// <summary>
+    /// Pull modules from DaisiGit remote fork to local cache.
+    /// Runs synchronously during startup to ensure modules are available before conversation starts.
+    /// </summary>
+    private void PullRemoteModules()
+    {
+        var config = ConfigManager.Config;
+        if (string.IsNullOrEmpty(config.DaisiGitServer) || string.IsNullOrEmpty(config.DaisiGitToken))
+        {
+            InferenceLog.Log("[modules] DaisiGit pull skipped: server or token not configured");
+            return;
+        }
+
+        try
+        {
+            using var source = new Modules.ModuleRemoteSource(
+                config.DaisiGitServer, config.DaisiGitToken, config.ModulesRepo!,
+                config.ModulesBranch, log: msg => InferenceLog.Log($"[modules] {msg}"));
+
+            var count = source.PullAsync().GetAwaiter().GetResult();
+            if (count > 0)
+                InferenceLog.Log($"[modules] Pulled {count} module(s) from {config.ModulesRepo}");
+        }
+        catch (Exception ex)
+        {
+            InferenceLog.Log($"[modules] Remote pull failed: {ex.Message}");
+            // Continue with local modules — don't block startup on network failure
+        }
+    }
+
+    /// <summary>
     /// Initialize the MinionPool and register orchestration tools.
     /// Called after model loading for summoner-type minions.
     /// </summary>
@@ -129,11 +171,13 @@ public abstract class MinionBase : IDisposable
         if (TypeConfig?.Name != "summoner" || ModelHandle == null) return;
 
         Pool = new MinionPool(ModelHandle, ConfigManager, Sandbox);
+        Pool.OnChildEvent = (childId, msg) => ReportInfo($"[{childId}] {msg}");
         ToolRegistry.Register(new SpawnMinionTool(Pool));
         ToolRegistry.Register(new CheckMinionTool(Pool));
         ToolRegistry.Register(new SendMessageTool(Pool));
         ToolRegistry.Register(new StopMinionTool(Pool));
         ToolRegistry.Register(new ListMinionsTool(Pool));
+        ToolRegistry.Register(new EvaluateMinionTool(Pool));
 
         InferenceLog.Log("Orchestration tools registered (summoner mode)");
     }
@@ -155,6 +199,10 @@ public abstract class MinionBase : IDisposable
         ToolRegistry.Register(new ReadModuleTool(evolver));
         ToolRegistry.Register(new CommitModuleTool(evolver));
         ToolRegistry.Register(new ListModulesTool(evolver));
+        ToolRegistry.Register(new EvaluateModuleTool(evolver));
+        ToolRegistry.Register(new StartEvolutionRunTool(ConfigManager));
+        ToolRegistry.Register(new PushModuleTool(ConfigManager));
+        ToolRegistry.Register(new SubmitEvolutionPrTool(ConfigManager));
 
         InferenceLog.Log("Evolution tools registered (darwin mode)");
     }
@@ -219,6 +267,13 @@ public abstract class MinionBase : IDisposable
         var systemPrompt = BuildSystemPrompt();
         var toolDefs = ToolRegistry.GetToolDefinitions();
         Conversation = new ConversationManager(systemPrompt, toolDefs);
+
+        // Enable grammar-constrained tool calling if configured.
+        // Skip for summoner type — too many tools makes grammar constraint too slow.
+        // Child minions spawned by the summoner get grammar via MinionPool.
+        if (ConfigManager.Config.UseGrammarToolCalls && TypeConfig?.Name != "summoner")
+            Conversation.EnableGrammarMode();
+
         Conversation.Initialize(ModelHandle);
     }
 
@@ -254,12 +309,33 @@ public abstract class MinionBase : IDisposable
 
         var fullResponse = await StreamTokensAsync(
             Conversation!.SendAsync(userMessage, parameters, ct), ct);
+        ReportModelOutput(fullResponse);
 
         var toolFmt = MinionToolFormatter.Instance;
+        int parseFailures = 0;
         while (toolFmt.ContainsToolCalls(fullResponse))
         {
             var toolCalls = toolFmt.ParseToolCalls(fullResponse);
-            if (toolCalls.Count == 0) break;
+            if (toolCalls.Count == 0)
+            {
+                // Tool call detected but JSON failed to parse — tell the model
+                if (++parseFailures > 3) break; // give up after 3 retries
+                ReportInfo("Tool call malformed — retrying");
+                Conversation!.AddToolResult("system",
+                    "Your tool call had invalid JSON. Use this exact format: {\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}. acceptance_criteria must be a single string, not an array.");
+                fullResponse = await StreamTokensAsync(
+                    Conversation.ResumeAsync(parameters, ct), ct);
+                continue;
+            }
+
+            // Check for "complete" signal tool
+            var completeTool = toolCalls.FirstOrDefault(c => c.Name == "complete");
+            if (completeTool != null)
+            {
+                var summary = completeTool.Arguments["summary"]?.ToString() ?? "done";
+                ReportInfo($"GOAL_COMPLETE: {summary}");
+                return $"GOAL_COMPLETE {summary}";
+            }
 
             for (int i = 0; i < toolCalls.Count; i++)
             {
@@ -275,6 +351,7 @@ public abstract class MinionBase : IDisposable
 
             fullResponse = await StreamTokensAsync(
                 Conversation.ResumeAsync(parameters, ct), ct);
+            ReportModelOutput(fullResponse);
         }
 
         // Module post-processing
@@ -294,7 +371,7 @@ public abstract class MinionBase : IDisposable
             Your goal: {goal}
 
             Call tools immediately to accomplish this goal. Do not explain what you plan to do — just call the tool.
-            When done, respond with GOAL_COMPLETE and a brief summary.
+            When done, call the "complete" tool with a brief summary in the "summary" argument.
             """;
 
         for (int iteration = 1; iteration <= maxIterations; iteration++)
@@ -305,12 +382,25 @@ public abstract class MinionBase : IDisposable
 
             var message = iteration == 1
                 ? goalPrompt
-                : "You have not completed the goal yet. Call a tool now to make progress. If the goal is complete, respond with GOAL_COMPLETE.";
+                : "Continue working on the goal. Call a tool to make progress. When done, call the \"complete\" tool.";
 
             var fullResponse = await RunAgenticStepAsync(message, ct);
 
             if (fullResponse.Contains("GOAL_COMPLETE", StringComparison.OrdinalIgnoreCase))
+            {
+                // For summoner type: verify that children actually produced output
+                if (Pool != null && Pool.Children.Count > 0)
+                {
+                    var totalFiles = Pool.Children.Values.Sum(c => c.FilesModified.Count);
+                    var totalTools = Pool.Children.Values.Sum(c => c.ToolCallCount);
+                    if (totalFiles == 0 && totalTools == 0)
+                    {
+                        ReportInfo("GOAL_COMPLETE rejected: no children produced any files or tool calls. Continuing.");
+                        continue;
+                    }
+                }
                 return (iteration, true);
+            }
         }
 
         return (maxIterations, false);
@@ -381,6 +471,9 @@ public abstract class MinionBase : IDisposable
 
     /// <summary>Report an error message.</summary>
     protected abstract void ReportError(string message);
+
+    /// <summary>Report the model's raw output (thinking + tool calls) for logging.</summary>
+    protected virtual void ReportModelOutput(string output) { }
 
     public virtual void Dispose()
     {

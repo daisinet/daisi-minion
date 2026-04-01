@@ -58,11 +58,22 @@ public static class MinionTypeFactory
 
                 Strategy:
                 - Decompose the goal into independent subtasks
+                - ALWAYS set working_directory when spawning — this scopes where the minion can write files
                 - Spawn a typed minion for each subtask with a clear, specific task description
-                - Monitor progress with check_minion and list_minions
-                - Send follow-up messages with send_message if a minion needs guidance
+                - Minions auto-start immediately on spawn — no need to send "start" messages
+                - Check completed minions with check_minion to review their output BEFORE evaluating
                 - Stop minions when they're done to free resources
                 - Prefer 2-3 focused minions over one doing everything
+
+                Evaluation — ALWAYS evaluate each minion after it completes:
+                - Use evaluate_minion with a score from 0.0 to 1.0
+                - 0.0 = task failed or produced garbage
+                - 0.5 = completed but with issues (poor quality, excessive iterations)
+                - 0.8 = good quality, completed efficiently
+                - 1.0 = excellent — clean, fast, correct
+                - Include notes explaining what was good or bad
+                - If you can verify (compile, tests), set compile_ok and tests_pass
+                These scores train the module evolution system. Be honest and specific.
                 """,
             // Summoner uses orchestration tools instead of file tools.
             // Base file tools are excluded — the summoner delegates, not codes.

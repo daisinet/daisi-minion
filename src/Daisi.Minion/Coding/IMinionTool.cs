@@ -55,6 +55,13 @@ public static class ToolArgs
         }
     }
 
-    public static string? GetString(JsonObject args, string key) =>
-        args[key]?.GetValue<string>();
+    public static string? GetString(JsonObject args, string key)
+    {
+        var node = args[key];
+        if (node == null) return null;
+        // Handle arrays: model sometimes sends ["item1", "item2"] instead of "item1\nitem2"
+        if (node is System.Text.Json.Nodes.JsonArray arr)
+            return string.Join("\n", arr.Select(n => n?.ToString() ?? ""));
+        return node.GetValue<string>();
+    }
 }
