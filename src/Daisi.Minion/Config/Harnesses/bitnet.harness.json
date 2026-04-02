@@ -1,0 +1,13 @@
+{
+  "chat_format": "custom",
+  "supports_system_role": false,
+  "prepend_bos": true,
+  "user_prefix": "Human: ",
+  "user_suffix": "\n\n",
+  "assistant_prefix": "BITNETAssistant: ",
+  "assistant_suffix": "\n",
+  "generation_prompt": "BITNETAssistant: ",
+  "stop_sequences": ["Human:"],
+  "tool_call_style": "json_tags",
+  "tool_instruction": "To call a tool, respond with a JSON object inside <tool_call> tags:\n\n<tool_call>\n{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n\nCall tools immediately. Do not explain what you plan to do."
+}

@@ -8,6 +8,7 @@ using Daisi.Minion.Evolution;
 using Daisi.Minion.Types;
 using Daisi.Llogos.Chat;
 using Daisi.Llogos.Inference;
+using Daisi.Llogos.Model;
 
 namespace Daisi.Minion.Engine;
 
@@ -35,6 +36,7 @@ public abstract class MinionBase : IDisposable
 
     protected ConversationManager? Conversation;
     protected DaisiLlogosModelHandle? ModelHandle;
+    protected ChatHarness? ActiveHarness;
     protected int ActiveContextSize;
 
     protected readonly ToolSandbox Sandbox;
@@ -255,6 +257,7 @@ public abstract class MinionBase : IDisposable
 
     /// <summary>
     /// Initialize the conversation with the current model and system prompt.
+    /// Resolves the per-model chat harness to determine prompt formatting.
     /// </summary>
     protected void InitializeConversation()
     {
@@ -264,9 +267,15 @@ public abstract class MinionBase : IDisposable
         InitializeOrchestration();
         InitializeEvolution();
 
+        // Resolve per-model chat harness
+        ActiveHarness = ChatHarness.Resolve(
+            ModelHandle.FilePath,
+            ModelHandle.Config.Architecture,
+            ModelHandle.ChatTemplate.RawTemplate);
+
         var systemPrompt = BuildSystemPrompt();
         var toolDefs = ToolRegistry.GetToolDefinitions();
-        Conversation = new ConversationManager(systemPrompt, toolDefs);
+        Conversation = new ConversationManager(systemPrompt, toolDefs, ActiveHarness);
 
         // Enable grammar-constrained tool calling if configured.
         // Skip for summoner type — too many tools makes grammar constraint too slow.

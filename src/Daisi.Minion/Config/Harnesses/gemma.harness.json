@@ -1,0 +1,7 @@
+{
+  "chat_format": "gemma",
+  "supports_system_role": false,
+  "prepend_bos": false,
+  "stop_sequences": ["<end_of_turn>"],
+  "tool_call_style": "json_tags"
+}
