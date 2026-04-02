@@ -56,6 +56,33 @@ Tui/
   StartupSpinner.cs       Loading indicators
 ```
 
+## Tool Calling
+
+Minions use JSON-formatted tool calls to interact with the filesystem, run commands, and search code. Two systems work together to maximize reliability on small local models:
+
+### GBNF Grammar Constraints
+
+When enabled, a GBNF grammar constrains model output to valid JSON tool call structure. The model *cannot* produce malformed JSON — the grammar rejects invalid tokens before they're sampled.
+
+Enable in config (`grammar_tool_calls: true`) or via CLI (`--grammar`).
+
+Three grammar strategies are available depending on model behavior:
+- **Strict** — raw JSON only (default when grammar is enabled)
+- **ThinkingThenTool** — allows `<think>` reasoning before the tool call
+- **TagWrapped** — JSON inside `<tool_call>` tags
+
+### Automatic Retry
+
+If a tool call has invalid JSON (common without grammar), the minion retries up to 3 times. Each retry injects a system message showing the correct format. Combined with grammar mode, malformed tool calls are effectively eliminated.
+
+### Qwen Native Tool Calls
+
+Qwen 3.5 models emit XML-style tool calls natively. The minion's `QwenToolCallParser` handles both XML and JSON formats transparently, with automatic fixup for common malformations (missing quotes, trailing commas).
+
+### File Validation
+
+File write and edit operations automatically validate structural integrity before committing changes. Supported formats: HTML (tag balance), JSON (parse validity), CSS/JS (brace balance), XML/XAML (parse validity), C# (brace/comment balance). Invalid writes are rejected with line-numbered errors, prompting the model to fix and retry.
+
 ## Two Modes
 
 ### TUI Mode (default)
@@ -122,6 +149,58 @@ When the user is idle, the minion can offer its loaded model to the ORC network 
 
 > **Status**: Scaffolded but disabled. The transition between host-mode inference and local coding inference needs further work.
 
+## Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show available commands |
+| `/model` | Switch active GGUF model |
+| `/role` | Switch active role |
+| `/persona` | Switch personality trait |
+| `/clear` | Clear conversation history |
+| `/compact` | Summarize and compact context |
+| `/goal` | Enter autonomous goal mode |
+| `/backend` | Switch inference backend |
+| `/name` | Change display name |
+| `/darwin` | Evolve modules — auto-picks weakest or specify by name (`/darwin react-reviewer`) |
+| `/cron` | Schedule recurring commands (`/cron add check 5m /darwin`) |
+
+### /darwin
+
+Triggers module evolution via the Darwin compile-test-validate loop:
+
+```
+/darwin                    # Evolve weakest-performing module
+/darwin react-reviewer     # Evolve specific module
+/darwin --list             # Show module scores with trends
+/darwin --all              # Evolve all modules below threshold
+```
+
+### /cron
+
+Schedule recurring commands with interval syntax:
+
+```
+/cron add <name> <interval> <command>   # e.g. /cron add evolve 2h /darwin
+/cron remove <name>
+/cron list
+/cron run <name>                        # Run immediately
+```
+
+Intervals: `30s`, `5m`, `2h`, `1d`. Schedules persist in `~/.daisi-minion/cron.json`.
+
+## Summoner Evaluation Pipeline
+
+When a summoner spawns child minions, it can evaluate their work through a structured review gate:
+
+1. **Spawn with criteria** — `spawn_minion` accepts `acceptance_criteria` that define what success looks like
+2. **Child works autonomously** — completes the task using its tools
+3. **Summoner reviews** — must call `check_minion` to inspect the child's output (sets a review flag)
+4. **Summoner scores** — calls `evaluate_minion` with a 0.0-1.0 score. This is gated — evaluation is rejected if the summoner hasn't reviewed first
+5. **Blended scoring** — final score = 70% summoner assessment + 30% objective metrics (from `BenchmarkProfile`)
+
+Scores feed into Darwin's module evolution loop and the LoRA training pipeline.
+
 ## Configuration
 
 Stored at `~/.daisi-minion/config.json`:
@@ -140,6 +219,16 @@ Stored at `~/.daisi-minion/config.json`:
 | `minion_name` | `minion` | Display name |
 | `working_directory` | — | Override working directory |
 | `idle_timeout_minutes` | 5 | Minutes before entering host mode |
+| `grammar_tool_calls` | `false` | Enable GBNF grammar-constrained tool calling |
+| `kv_quant` | — | KV cache compression: `"turbo"`, `"turbo:3"`, `"turbo:4"` |
+
+### CLI Flags
+
+| Flag | Description |
+|------|-------------|
+| `--grammar` | Enable GBNF grammar-constrained tool calls |
+| `--gpu-layers N` | Number of transformer layers to offload to GPU |
+| `--kv-quant MODE` | KV cache compression (e.g., `turbo:3`) |
 
 Per-model profiles (context size, temperature, top_k, top_p, repetition penalty) are auto-fetched from HuggingFace on first load and saved alongside the model file.
 
@@ -204,3 +293,4 @@ daisi-minion is a standalone project. It can operate fully independently, but al
 Active experiments exploring the future of minion capabilities:
 
 - [Self-Evolving Minions](docs/experiments/self-evolving-minions.md) — Dynamic compilation, minion type hierarchies, and autonomous self-improvement
+- [LoRA Evolution](docs/experiments/lora-evolution.md) — Training adapters from minion sessions to evolve model weights alongside module code
