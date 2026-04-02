@@ -193,7 +193,11 @@ public sealed class ChatHarness
         if (arch.StartsWith("bitnet"))
             return "bitnet";
 
-        // ChatML family (Qwen, Yi, InternLM, etc.)
+        // Qwen3 has a different tool preamble from Qwen3.5
+        if (arch == "qwen3")
+            return "qwen3";
+
+        // ChatML family (Qwen3.5, Yi, InternLM, etc.)
         if (arch.StartsWith("qwen") || arch == "yi" || arch == "internlm" || arch == "internlm2")
             return "chatml";
 
