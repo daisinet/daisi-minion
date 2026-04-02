@@ -661,6 +661,16 @@ public sealed class MinionEngine : IDisposable
 
             _modelHandle = ((DaisiLlogosModelHandleAdapter)handleAdapter).Inner;
             _activeContextSize = contextSize;
+
+            // Merge LoRA adapter if configured
+            var adapterPath = _configManager.Config.LoraAdapter;
+            if (!string.IsNullOrEmpty(adapterPath))
+            {
+                loadSpinner.Update("Merging LoRA adapter...");
+                Evolution.AdapterLoader.MergeIfConfigured(
+                    adapterPath, _modelHandle, msg => loadSpinner.Update(msg));
+            }
+
             loadSpinner.Finish($"{_modelHandle.ModelId} ({_modelHandle.Config.Architecture}, {_modelHandle.Config.NumLayers}L, ctx={contextSize})");
         }
         catch (Exception ex)
@@ -991,6 +1001,7 @@ public sealed class MinionEngine : IDisposable
         _commands.Register("darwin", new DarwinCommandHandler(_renderer, _configManager, RunGoalAsync));
         _cronScheduler = new CronScheduler(_commands, msg => InferenceLog.Log(msg));
         _commands.Register("cron", new CronCommandHandler(_renderer, _cronScheduler));
+        _commands.Register("train", new TrainCommandHandler(_renderer, _configManager));
     }
 
     private void ShowRawLastResponse()

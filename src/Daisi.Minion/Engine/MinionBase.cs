@@ -408,10 +408,28 @@ public abstract class MinionBase : IDisposable
                         continue;
                     }
                 }
+
+                TryExportTrainingData(new TaskOutcome
+                {
+                    Succeeded = true,
+                    IterationsUsed = iteration,
+                    IterationBudget = maxIterations,
+                    FilesModified = Conversation?.FilesModified.Count ?? 0,
+                    TaskDescription = goal,
+                });
                 return (iteration, true);
             }
         }
 
+        TryExportTrainingData(new TaskOutcome
+        {
+            Succeeded = false,
+            IterationsUsed = maxIterations,
+            IterationBudget = maxIterations,
+            FilesModified = Conversation?.FilesModified.Count ?? 0,
+            TaskDescription = goal,
+            WasStopped = ct.IsCancellationRequested,
+        });
         return (maxIterations, false);
     }
 
@@ -458,6 +476,30 @@ public abstract class MinionBase : IDisposable
             {
                 ReportError($"Auto-compact failed: {ex.Message}");
             }
+        }
+    }
+
+    /// <summary>
+    /// Export the current conversation as training data if quality criteria are met.
+    /// Called after goal completion or exhaustion.
+    /// </summary>
+    protected void TryExportTrainingData(TaskOutcome? outcome)
+    {
+        var config = ConfigManager.Config;
+        if (!config.TrainingAutoExport) return;
+        if (Conversation?.History == null || Conversation.History.Count < 4) return;
+
+        try
+        {
+            var exporter = new TrainingDataExporter(config.TrainingDataDir);
+            var exported = exporter.Export(
+                Conversation.History, outcome, config.TrainingMinQuality);
+            if (exported > 0)
+                ReportInfo($"Exported {exported} messages as training data.");
+        }
+        catch (Exception ex)
+        {
+            ReportInfo($"Training data export failed: {ex.Message}");
         }
     }
 
