@@ -11,6 +11,7 @@ public class CliIntegrationTests
 {
     private static readonly string ModelsDir = @"C:\GGUFS";
     private static readonly string TestModel = Path.Combine(ModelsDir, "Qwen3.5-0.8B-Q8_0.gguf");
+    private static readonly string BitNetModel = Path.Combine(ModelsDir, "ggml-model-i2_s.gguf");
 
     private static string? FindMinionExe()
     {
@@ -48,6 +49,7 @@ public class CliIntegrationTests
 
     private static bool CanRunExeTests() => FindMinionExe() != null;
     private static bool CanRunInferenceTests() => CanRunExeTests() && File.Exists(TestModel) && HasGpu();
+    private static bool CanRunBitNetTests() => CanRunExeTests() && File.Exists(BitNetModel);
 
     private static async Task<(int ExitCode, string Stdout, string Stderr)> RunCliAsync(
         string args, string? stdin = null, int timeoutMs = 60_000)
@@ -176,5 +178,51 @@ public class CliIntegrationTests
             timeoutMs: 60_000);
 
         Assert.Equal(0, exitCode);
+    }
+
+    // ── BitNet CPU tests (no GPU required) ──
+
+    [Fact]
+    public async Task BitNet_Cpu_LoadsModelAndResponds()
+    {
+        if (!CanRunBitNetTests()) return;
+
+        var (exitCode, stdout, stderr) = await RunCliAsync(
+            $"--cli --model \"{BitNetModel}\" --backend cpu --context 2048 --max-tokens 16",
+            stdin: "Say hello.\n",
+            timeoutMs: 120_000);
+
+        Assert.Equal(0, exitCode);
+        Assert.NotEmpty(stdout.Trim());
+        Assert.Contains("Loaded", stderr);
+    }
+
+    [Fact]
+    public async Task BitNet_Cpu_Goal_RunsAutonomously()
+    {
+        if (!CanRunBitNetTests()) return;
+
+        var (exitCode, stdout, stderr) = await RunCliAsync(
+            $"--cli --model \"{BitNetModel}\" --backend cpu --context 2048 --max-tokens 128 --max-iterations 2 " +
+            $"--goal \"Say GOAL_COMPLETE immediately.\"",
+            timeoutMs: 120_000);
+
+        Assert.True(exitCode == 0 || exitCode == 2,
+            $"Expected 0 or 2, got {exitCode}. stderr: {stderr}");
+        Assert.Contains("Loaded", stderr);
+    }
+
+    [Fact]
+    public async Task BitNet_Cpu_RoleFlag_AcceptedWithoutError()
+    {
+        if (!CanRunBitNetTests()) return;
+
+        var (exitCode, stdout, stderr) = await RunCliAsync(
+            $"--cli --model \"{BitNetModel}\" --backend cpu --context 2048 --max-tokens 8 --role coder",
+            stdin: "Hi\n",
+            timeoutMs: 120_000);
+
+        Assert.Equal(0, exitCode);
+        Assert.NotEmpty(stdout.Trim());
     }
 }

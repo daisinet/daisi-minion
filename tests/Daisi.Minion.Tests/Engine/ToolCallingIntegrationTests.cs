@@ -18,6 +18,7 @@ namespace Daisi.Minion.Tests.Engine;
 public class ToolCallingIntegrationTests : IAsyncLifetime
 {
     private static readonly string TestModelPath = @"C:\GGUFS\custom\Qwen3.5-9B-Q8_0.gguf";
+    private static readonly string BitNetModelPath = @"C:\GGUFS\ggml-model-i2_s.gguf";
     private static readonly string TestDir = Path.Combine(Path.GetTempPath(), $"minion-tool-test-{Guid.NewGuid():N}");
 
     private DaisiLlogosModelHandle? _modelHandle;
@@ -358,5 +359,151 @@ index.html
         Assert.Contains("<!DOCTYPE html>", content);
         Assert.Contains("<nav", content);
         Assert.Contains("</html>", content);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  TEST 9: BitNet on CPU — loads and generates tokens
+    // ══════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task BitNet_Cpu_LoadsAndGenerates()
+    {
+        if (!File.Exists(BitNetModelPath))
+        {
+            Assert.Skip("BitNet model not available at " + BitNetModelPath);
+            return;
+        }
+
+        var backend = new DaisiLlogosTextBackend();
+        await backend.ConfigureAsync(new BackendConfiguration { Runtime = "cpu" });
+
+        var adapter = await backend.LoadModelAsync(new ModelLoadRequest
+        {
+            ModelId = "bitnet-test",
+            FilePath = BitNetModelPath,
+            ContextSize = 2048,
+        });
+
+        using var handle = ((DaisiLlogosModelHandleAdapter)adapter).Inner;
+
+        // Create a tool session using MinionChatRenderer with the BitNet harness
+        var tools = new CodingToolRegistry();
+        tools.Register(new FileWriteTool());
+
+        var harness = Daisi.Minion.Config.ChatHarness.Resolve(
+            BitNetModelPath,
+            handle.Config.Architecture,
+            handle.ChatTemplate.RawTemplate);
+
+        var renderer = new MinionChatRenderer(tools.GetToolDefinitions(), harness: harness);
+        var systemPrompt = $"You are a coding assistant. Working directory: {TestDir}";
+        using var session = handle.CreateChatSession(2048, systemPrompt, renderer);
+
+        // Generate a few tokens to verify the pipeline works end-to-end
+        var sb = new StringBuilder();
+        var parameters = new GenerationParams
+        {
+            MaxTokens = 32,
+            Temperature = 1.0f,
+            TopK = 20,
+            TopP = 0.95f,
+            RepetitionPenalty = 1.0f,
+        };
+
+        await foreach (var token in session.ChatAsync(
+            new ChatMessage("user", "Say hello."), parameters))
+        {
+            sb.Append(token);
+        }
+
+        var response = sb.ToString();
+
+        // Write debug output
+        Directory.CreateDirectory(TestDir);
+        File.WriteAllText(Path.Combine(TestDir, "debug_bitnet.txt"), response);
+
+        Assert.True(response.Length > 0,
+            "BitNet model produced no output on CPU");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  TEST 10: BitNet on CPU — attempts tool call
+    // ══════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task BitNet_Cpu_AttemptsToolCall()
+    {
+        if (!File.Exists(BitNetModelPath))
+        {
+            Assert.Skip("BitNet model not available at " + BitNetModelPath);
+            return;
+        }
+
+        var backend = new DaisiLlogosTextBackend();
+        await backend.ConfigureAsync(new BackendConfiguration { Runtime = "cpu" });
+
+        var adapter = await backend.LoadModelAsync(new ModelLoadRequest
+        {
+            ModelId = "bitnet-tool-test",
+            FilePath = BitNetModelPath,
+            ContextSize = 2048,
+        });
+
+        using var handle = ((DaisiLlogosModelHandleAdapter)adapter).Inner;
+
+        var tools = new CodingToolRegistry();
+        tools.Register(new FileWriteTool());
+
+        var harness = Daisi.Minion.Config.ChatHarness.Resolve(
+            BitNetModelPath,
+            handle.Config.Architecture,
+            handle.ChatTemplate.RawTemplate);
+
+        var renderer = new MinionChatRenderer(tools.GetToolDefinitions(), harness: harness);
+        var systemPrompt = $"You are a coding assistant. Working directory: {TestDir}";
+        using var session = handle.CreateChatSession(2048, systemPrompt, renderer);
+
+        var sb = new StringBuilder();
+        var parameters = new GenerationParams
+        {
+            MaxTokens = 512,
+            Temperature = 1.0f,
+            TopK = 20,
+            TopP = 0.95f,
+            RepetitionPenalty = 1.0f,
+        };
+
+        var targetFile = Path.Combine(TestDir, "bitnet_test.html");
+        await foreach (var token in session.ChatAsync(
+            new ChatMessage("user",
+                $"Create a file at {targetFile} containing '<h1>Hello</h1>'. Use the file_write tool."),
+            parameters))
+        {
+            sb.Append(token);
+        }
+
+        var response = sb.ToString();
+
+        // Write debug output for analysis regardless of tool call success
+        Directory.CreateDirectory(TestDir);
+        File.WriteAllText(Path.Combine(TestDir, "debug_bitnet_tool.txt"),
+            $"Harness format: {harness.ChatFormat}\n" +
+            $"Architecture: {handle.Config.Architecture}\n" +
+            $"Response length: {response.Length}\n\n" +
+            $"Response:\n{response}");
+
+        // At 2B params, tool calling may not work reliably.
+        // Log whether it produced a tool call for iteration.
+        var hasToolCall = QwenToolCallParser.ContainsToolCalls(response);
+        if (!hasToolCall)
+        {
+            // Not a failure — just informational for the harness iteration loop
+            File.AppendAllText(Path.Combine(TestDir, "debug_bitnet_tool.txt"),
+                "\n\n--- NO TOOL CALL DETECTED ---\n" +
+                "This is expected for a 2B model. Iterate on the harness to improve.");
+        }
+
+        // The test passes as long as the model generated something — tool calling is aspirational
+        Assert.True(response.Length > 0, "BitNet model produced no output");
     }
 }

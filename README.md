@@ -41,6 +41,8 @@ Config/
   MinionConfig.cs         Settings (model, backend, context, temperature, etc.)
   ConfigManager.cs        Load/save ~/.daisi-minion/config.json
   ModelProfile.cs         Per-model generation parameters
+  ChatHarness.cs          Per-model prompt format, stop sequences, tool call style
+  Harnesses/              Built-in harnesses (chatml, llama3, gemma, phi3, bitnet)
 
 Host/
   DualModeOrchestrator.cs Idle → host mode transitions
@@ -140,6 +142,46 @@ Stored at `~/.daisi-minion/config.json`:
 | `idle_timeout_minutes` | 5 | Minutes before entering host mode |
 
 Per-model profiles (context size, temperature, top_k, top_p, repetition penalty) are auto-fetched from HuggingFace on first load and saved alongside the model file.
+
+## Chat Harnesses
+
+Each model gets its own **chat harness** that defines how prompts are formatted. Harnesses are stored as `{model-name}.harness.json` in `~/.daisi-minion/models/`.
+
+Resolution order:
+1. **User override** — edit the `.harness.json` file to customize prompt formatting
+2. **Built-in** — shipped in the assembly for known architectures (ChatML, Llama3, Gemma, Phi3, BitNet)
+3. **Auto-detected** — parsed from the GGUF `tokenizer.chat_template` metadata
+4. **Default** — ChatML
+
+A harness controls:
+
+| Field | Description |
+|-------|-------------|
+| `chat_format` | `"chatml"`, `"llama3"`, `"gemma"`, `"phi3"`, or `"custom"` |
+| `supports_system_role` | Whether the model has a native system role |
+| `user_prefix` / `user_suffix` | Wrapping for user messages (custom format) |
+| `assistant_prefix` / `assistant_suffix` | Wrapping for assistant messages (custom format) |
+| `generation_prompt` | Text prepended to start assistant generation |
+| `stop_sequences` | End-of-turn strings |
+| `tool_call_style` | `"json_tags"`, `"raw_json"`, or `"none"` |
+| `tool_instruction` | Custom instruction text for tool calling |
+
+Example — the auto-generated BitNet harness:
+```json
+{
+  "chat_format": "custom",
+  "supports_system_role": false,
+  "prepend_bos": true,
+  "user_prefix": "Human: ",
+  "user_suffix": "\n\n",
+  "assistant_prefix": "BITNETAssistant: ",
+  "generation_prompt": "BITNETAssistant: ",
+  "stop_sequences": ["Human:"],
+  "tool_call_style": "json_tags"
+}
+```
+
+To iterate on a model's prompt format, edit its harness file and re-run. The harness is loaded on every conversation reset.
 
 ## Dependencies
 
