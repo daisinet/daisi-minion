@@ -1,0 +1,7 @@
+{
+  "chat_format": "llama3",
+  "supports_system_role": true,
+  "prepend_bos": true,
+  "stop_sequences": ["<|eot_id|>"],
+  "tool_call_style": "json_tags"
+}

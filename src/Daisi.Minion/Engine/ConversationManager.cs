@@ -1,5 +1,6 @@
 using Daisi.Llogos.Chat;
 using Daisi.Llogos.Inference;
+using Daisi.Minion.Config;
 
 namespace Daisi.Minion.Engine;
 
@@ -21,6 +22,7 @@ public sealed class ConversationManager : IDisposable
     private int[]? _stopTokenIds;
     private bool _grammarMode;
     private string? _toolCallGrammar;
+    private ChatHarness? _harness;
 
     // Track files that have been read and/or modified during this conversation
     private readonly HashSet<string> _filesRead = new(StringComparer.OrdinalIgnoreCase);
@@ -42,14 +44,15 @@ public sealed class ConversationManager : IDisposable
     public string RenderPrompt()
     {
         if (_session?.History == null) return "";
-        var renderer = new MinionChatRenderer(_toolDefinitions);
+        var renderer = new MinionChatRenderer(_toolDefinitions, harness: _harness);
         return renderer.Render(_session.History, addGenerationPrompt: true);
     }
 
-    public ConversationManager(string systemPrompt, List<ToolDefinition> toolDefinitions)
+    public ConversationManager(string systemPrompt, List<ToolDefinition> toolDefinitions, ChatHarness? harness = null)
     {
         _systemPrompt = systemPrompt;
         _toolDefinitions = toolDefinitions;
+        _harness = harness;
     }
 
     /// <summary>
@@ -76,7 +79,7 @@ public sealed class ConversationManager : IDisposable
         _filesModified.Clear();
         if (_modelHandle == null) return;
 
-        var renderer = new MinionChatRenderer(_toolDefinitions, grammarMode: _grammarMode);
+        var renderer = new MinionChatRenderer(_toolDefinitions, grammarMode: _grammarMode, harness: _harness);
         _session = _modelHandle.CreateChatSession(_systemPrompt, renderer);
 
         if (!_grammarMode)

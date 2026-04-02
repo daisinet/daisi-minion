@@ -7,6 +7,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Personas\*.md" />
     <EmbeddedResource Include="Traits\*.md" />
+    <EmbeddedResource Include="Config\Harnesses\*.harness.json" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.*" />

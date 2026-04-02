@@ -1,0 +1,7 @@
+{
+  "chat_format": "chatml",
+  "supports_system_role": true,
+  "prepend_bos": false,
+  "stop_sequences": ["<|im_end|>"],
+  "tool_call_style": "json_tags"
+}
