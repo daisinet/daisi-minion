@@ -58,18 +58,30 @@ public sealed class MinionChatRenderer : IChatRenderer
     {
         if (_tools.Count == 0) return "";
 
-        var sb = new StringBuilder();
-        sb.Append("\n<tools>\n");
+        // Serialize tool definitions as JSON lines
+        var toolJson = new StringBuilder();
         foreach (var tool in _tools)
         {
-            sb.Append(JsonSerializer.Serialize(new
+            toolJson.Append(JsonSerializer.Serialize(new
             {
                 type = "function",
                 function = new { name = tool.Name, description = tool.Description, parameters = tool.ParametersSchema }
             }, JsonOpts));
-            sb.Append('\n');
+            toolJson.Append('\n');
         }
-        sb.Append("</tools>\n\n");
+        var toolDefs = toolJson.ToString().TrimEnd();
+
+        // If the harness has a tool_instruction with {tool_definitions} placeholder,
+        // use it as a complete template (e.g. Qwen3's "# Tools\n\nYou may call..." format)
+        if (!_grammarMode && _harness.ToolInstruction != null
+            && _harness.ToolInstruction.Contains("{tool_definitions}"))
+        {
+            return "\n" + _harness.ToolInstruction.Replace("{tool_definitions}", toolDefs) + "\n";
+        }
+
+        // Otherwise build the block with <tools> wrapper + instruction text
+        var sb = new StringBuilder();
+        sb.Append("\n<tools>\n").Append(toolDefs).Append("\n</tools>\n\n");
 
         if (_grammarMode)
         {
@@ -78,7 +90,6 @@ public sealed class MinionChatRenderer : IChatRenderer
         }
         else if (_harness.ToolInstruction != null)
         {
-            // Use the harness's custom tool instruction (empty string = suppress)
             if (_harness.ToolInstruction.Length > 0)
                 sb.Append(_harness.ToolInstruction).Append('\n');
         }
@@ -101,7 +112,11 @@ public sealed class MinionChatRenderer : IChatRenderer
         var sb = new StringBuilder();
         if (systemContent != null)
             sb.Append(systemContent);
-        sb.Append(BuildToolsBlock());
+
+        var toolsBlock = BuildToolsBlock();
+        if (toolsBlock.Length > 0 && systemContent != null)
+            sb.Append('\n'); // separate system content from tools block
+        sb.Append(toolsBlock);
         return sb.ToString();
     }
 

@@ -1,0 +1,8 @@
+{
+  "chat_format": "chatml",
+  "supports_system_role": true,
+  "prepend_bos": false,
+  "stop_sequences": ["<|im_end|>"],
+  "tool_call_style": "json_tags",
+  "tool_instruction": "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{tool_definitions}\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>"
+}
