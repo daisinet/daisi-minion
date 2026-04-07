@@ -14,6 +14,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\..\daisi-llogos\src\dotnet\Daisi.Llogos\Daisi.Llogos.csproj" />
+    <ProjectReference Include="..\..\..\daisi-llogos\src\dotnet\Daisi.Llogos.Training\Daisi.Llogos.Training.csproj" />
     <ProjectReference Include="..\..\..\daisi-llogos\src\dotnet\Daisi.Llogos.Cpu\Daisi.Llogos.Cpu.csproj" />
     <ProjectReference Include="..\..\..\daisi-llogos\src\dotnet\Daisi.Llogos.Cuda\Daisi.Llogos.Cuda.csproj" />
     <ProjectReference Include="..\..\..\daisi-llogos\src\dotnet\Daisi.Llogos.Vulkan\Daisi.Llogos.Vulkan.csproj" />

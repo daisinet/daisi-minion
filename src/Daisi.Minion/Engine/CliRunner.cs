@@ -278,6 +278,10 @@ public sealed class CliRunner : MinionBase
             ActiveContextSize = contextSize;
             ModelHandle.GpuLayerCount = gpuLayers;
 
+            // Merge LoRA adapter if configured
+            Evolution.AdapterLoader.MergeIfConfigured(
+                ConfigManager.Config.LoraAdapter, ModelHandle, ReportInfo);
+
             // Apply KV compression if configured
             var kvQuant = _kvQuantArg ?? ConfigManager.Config.KvQuant;
             if (!string.IsNullOrEmpty(kvQuant))

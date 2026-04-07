@@ -77,6 +77,45 @@ public sealed class MinionConfig
     [JsonPropertyName("pull_modules")]
     public bool PullModules { get; set; }
 
+    // ── LoRA Evolution ──
+
+    /// <summary>Path to a .llra adapter file to merge at model load. Null = no adapter.</summary>
+    [JsonPropertyName("lora_adapter")]
+    public string? LoraAdapter { get; set; }
+
+    /// <summary>Directory for training data corpus and adapters.</summary>
+    [JsonPropertyName("training_data_dir")]
+    public string TrainingDataDir { get; set; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".daisi-minion", "training");
+
+    /// <summary>Minimum quality score (0.0-1.0) for a session to be exported as training data.</summary>
+    [JsonPropertyName("training_min_quality")]
+    public double TrainingMinQuality { get; set; } = 0.6;
+
+    /// <summary>Auto-export sessions that meet quality threshold after goal completion.</summary>
+    [JsonPropertyName("training_auto_export")]
+    public bool TrainingAutoExport { get; set; }
+
+    /// <summary>LoRA rank for training. Typical: 4, 8, 16.</summary>
+    [JsonPropertyName("lora_rank")]
+    public int LoraRank { get; set; } = 8;
+
+    /// <summary>LoRA alpha scaling factor.</summary>
+    [JsonPropertyName("lora_alpha")]
+    public float LoraAlpha { get; set; } = 16.0f;
+
+    /// <summary>Training epochs per run.</summary>
+    [JsonPropertyName("training_epochs")]
+    public int TrainingEpochs { get; set; } = 3;
+
+    /// <summary>Training learning rate.</summary>
+    [JsonPropertyName("training_lr")]
+    public float TrainingLearningRate { get; set; } = 1e-4f;
+
+    /// <summary>Training sequence length in tokens.</summary>
+    [JsonPropertyName("training_seq_len")]
+    public int TrainingSeqLen { get; set; } = 2048;
+
     [JsonPropertyName("models")]
     public List<ModelEntry> Models { get; set; } = [];
 }
