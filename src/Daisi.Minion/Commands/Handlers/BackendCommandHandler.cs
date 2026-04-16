@@ -8,7 +8,7 @@ public sealed class BackendCommandHandler(
     ConfigManager configManager,
     Action<string> onBackendChanged) : ISlashCommandHandler
 {
-    private static readonly string[] ValidBackends = ["auto", "cpu", "cuda", "vulkan"];
+    private static readonly string[] ValidBackends = ["auto", "cpu", "cuda", "vulkan", "daisinet"];
 
     public Task HandleAsync(string args, CancellationToken ct)
     {

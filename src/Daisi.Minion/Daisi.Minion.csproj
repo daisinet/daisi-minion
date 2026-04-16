@@ -3,6 +3,11 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>Daisi.Minion</RootNamespace>
     <AssemblyName>daisi-minion</AssemblyName>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>daisi-minion</ToolCommandName>
+    <PackageId>Daisi.Minion</PackageId>
+    <Description>Autonomous coding minion CLI — runs goals locally (GGUF via Daisi.Llogos) or remotely (daisinet ORC).</Description>
+    <Authors>Daisinet</Authors>
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Personas\*.md" />
