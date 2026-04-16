@@ -1,0 +1,95 @@
+name: Release Minion NuGet Tool
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version (e.g. 1.0.10)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout daisi-minion
+        uses: actions/checkout@v4
+        with:
+          path: daisi-minion
+
+      - name: Checkout daisi-sdk-dotnet
+        uses: actions/checkout@v4
+        with:
+          repository: daisinet/daisi-sdk-dotnet
+          token: ${{ secrets.SDK_PAT }}
+          path: daisi-sdk-dotnet
+
+      - name: Checkout daisi-llogos
+        uses: actions/checkout@v4
+        with:
+          repository: daisinet/daisi-llogos
+          token: ${{ secrets.SDK_PAT }}
+          path: daisi-llogos
+
+      - name: Checkout daisi-hosts-dotnet
+        uses: actions/checkout@v4
+        with:
+          repository: daisinet/daisi-hosts-dotnet
+          token: ${{ secrets.SDK_PAT }}
+          path: daisi-hosts-dotnet
+
+      - name: Checkout daisi-git
+        uses: actions/checkout@v4
+        with:
+          repository: daisinet/daisi-git
+          token: ${{ secrets.SDK_PAT }}
+          path: daisi-git
+
+      - name: Checkout daisi-tools-dotnet
+        uses: actions/checkout@v4
+        with:
+          repository: daisinet/daisi-tools-dotnet
+          token: ${{ secrets.SDK_PAT }}
+          path: daisi-tools-dotnet
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $VERSION"
+
+      - name: Pack
+        run: >
+          dotnet pack daisi-minion/src/Daisi.Minion/Daisi.Minion.csproj
+          -c Release
+          -o ./artifacts
+          /p:Version=${{ steps.version.outputs.VERSION }}
+          /p:PackageVersion=${{ steps.version.outputs.VERSION }}
+
+      - name: Push to NuGet
+        run: dotnet nuget push artifacts/Daisi.Minion.*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "artifacts/Daisi.Minion.*.nupkg"
+          name: "Minion ${{ steps.version.outputs.VERSION }}"
+          body: "NuGet tool Daisi.Minion ${{ steps.version.outputs.VERSION }} published to nuget.org. Install: `dotnet tool install -g Daisi.Minion`"
+          tag_name: "v${{ steps.version.outputs.VERSION }}"
