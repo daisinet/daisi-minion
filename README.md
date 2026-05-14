@@ -1,3 +1,9 @@
+# DAISI has moved to [Daisi Git](https://git.daisi.ai/daisinet/), a free and fast git management studio that we built from scratch in C#.
+## This code base is no longer kept up to date here.
+---
+
+
+
 # daisi-minion
 
 A standalone local AI coding assistant that runs GGUF models via the Daisi Llogos inference engine. Minions are autonomous workers — they load a model, chat with it, execute tools, and complete tasks without cloud dependencies.
